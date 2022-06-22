@@ -89,7 +89,7 @@ def make_alex_net_v2(
     model = tf.keras.Model(inputs, x)
 
     if weights_path is not None:
-        load_weights(model, weights_path)
+        load_alexnet_weights(model, weights_path)
 
     return model
 
@@ -171,12 +171,12 @@ def make_vNet(input_shape=(128, 128, 3), output_shape=565, weights_path=None):
     model = tf.keras.Model(inputs, x)
 
     if weights_path is not None:
-        load_weights(model, weights_path)
+        load_alexnet_weights(model, weights_path)
 
     return model
 
 
-def load_weights(model, weights_path):
+def load_alexnet_weights(model, weights_path):
     """Loads the weights into a model from a file in place."""
     reader = tf.train.load_checkpoint(weights_path)
     dtypes = reader.get_variable_to_dtype_map()
