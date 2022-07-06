@@ -103,7 +103,7 @@ def get_images_from_cat(cats, preprocFun=None):
     return imgs
 
 
-def gcm_sim(rep1, rep2, r=2.0, c=1.0, p=1.0):
+def gcm_sim(rep1, rep2, r=2.0, c=1.0, p=2.0):
     """
     Return the GCM similarity between two representations with equal attention
     weights.
@@ -117,7 +117,7 @@ def gcm_sim(rep1, rep2, r=2.0, c=1.0, p=1.0):
     return np.exp(-c * dist ** p)
 
 
-def sim_prob(rep, cat1Rep, cat2Rep, equalize=False):
+def sim_prob(rep, cat1Rep, cat2Rep, equalize=False, nExemplars=None):
     """
     Return a probability of responding one of two categories represented by
     cat1Rep and cat2Rep to a given representation rep. Assumes that the first
@@ -125,12 +125,24 @@ def sim_prob(rep, cat1Rep, cat2Rep, equalize=False):
     dimension are features. If either category representations are a list,
     concatenate them. If equalize, then the number of exemplar for each
     category is equalized by randomly sampling without replacement from the
-    larger category equal to the smaller category.
+    larger category equal to the smaller category. If nExemplars is not None,
+    limit the exemplar counts in each representation to nExemplars by random
+    sampling.
     """
     if isinstance(cat1Rep, list):
         cat1Rep = np.concatenate(cat1Rep, axis=0)
     if isinstance(cat2Rep, list):
         cat2Rep = np.concatenate(cat2Rep, axis=0)
+
+    if nExemplars is not None and nExemplars < cat1Rep.shape[0]:
+        cat1Rep = cat1Rep[
+            np.random.choice(cat1Rep.shape[0], nExemplars, False)
+        ]
+
+    if nExemplars is not None and nExemplars < cat2Rep.shape[0]:
+        cat2Rep = cat2Rep[
+            np.random.choice(cat2Rep.shape[0], nExemplars, False)
+        ]
 
     if equalize:
         if cat1Rep.shape[0] < cat2Rep.shape[0]:
