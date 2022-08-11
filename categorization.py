@@ -103,7 +103,7 @@ def get_images_from_cat(cats, preprocFun=None):
     return imgs
 
 
-def gcm_sim(rep1, rep2, r=2.0, c=1.0, p=2.0):
+def gcm_sim(rep1, rep2, r=2.0, c=1.0, p=1.0):
     """
     Return the GCM similarity between two representations with equal attention
     weights.
@@ -117,7 +117,175 @@ def gcm_sim(rep1, rep2, r=2.0, c=1.0, p=2.0):
     return np.exp(-c * dist ** p)
 
 
-def sim_prob(rep, cat1Rep, cat2Rep, equalize=False, nExemplars=None):
+def prod_sim(rep1, rep2):
+    """
+    Return the similarity between two representations using the product rule.
+    """
+    assert np.all(rep1.shape == rep2.shape)
+
+    # Copy reps
+    rep1 = rep1.copy()
+    rep2 = rep2.copy()
+
+    # Normalize both reps between 0 and 1
+    rep1 = rep1 / np.sum(rep1)
+    rep2 = rep2 / np.sum(rep2)
+
+    # Compute absolute difference
+    diff = np.abs(rep1 - rep2)
+
+    # Flip such that 1 is perfectly matched
+    diff = np.abs(diff - 1)
+
+    return np.prod(diff)
+
+
+def prod_sim_binary(rep1, rep2, s=0.3, threshold=0.5):
+    """
+    Return the simliarity between two representations using the product rule
+    after binarizing the representations based on similarity threshold.
+    """
+    assert np.all(rep1.shape == rep2.shape)
+
+    # Copy reps
+    rep1 = rep1.copy()
+    rep2 = rep2.copy()
+
+    # Normalize both reps between 0 and 1
+    rep1 = rep1 / np.sum(rep1)
+    rep2 = rep2 / np.sum(rep2)
+
+    # Compute absolute difference
+    diff = np.abs(rep1 - rep2)
+
+    # Flip such that 1 is perfectly matched
+    diff = np.abs(diff - 1)
+
+    # Binarize
+    diff[diff < threshold] = s
+
+    return np.prod(diff)
+
+
+def contrast_sim(rep1, rep2, threshold=0.0):
+    """
+    Return similarity based on the contrast model where a feature is not
+    present if the value of a feature is equal or less than the threshold.
+    Uses equal weighting for overlap and distinct features for each
+    representation.
+    """
+    assert np.all(rep1.shape == rep2.shape)
+
+    # Copy reps
+    rep1 = rep1.copy()
+    rep2 = rep2.copy()
+
+    # Binarize reps
+    rep1[rep1 <= threshold] = 0
+    rep2[rep2 <= threshold] = 0
+    rep1[rep1 > threshold] = 1
+    rep2[rep2 > threshold] = 1
+
+    # Compute overlap
+    overlap = np.sum(rep1 * rep2)
+
+    # Count distinct feature
+    distinct = np.sum(np.abs(rep1 - rep2))
+
+    if (sim := overlap - distinct) < 0:
+        sim = 0.0
+
+    return sim
+
+
+def calculate_typicality(reps, simFun, nExemplars=None):
+    """
+    Return the typicality of each item given a category defined by the
+    representation.
+    """
+    if isinstance(reps, list):
+        reps = np.concatenate(reps, axis=0)
+
+    typicalities = np.empty(reps.shape[0])
+    for i, rep in enumerate(reps):
+        # Remove rep row from reps
+        reps_ = reps.copy()
+        reps_ = np.delete(reps_, i, axis=0)
+
+        if nExemplars is not None:
+            # Keep only nExemplars
+            reps_ = reps_[
+                np.random.choice(reps_.shape[0], nExemplars, replace=False)
+            ]
+
+        # Calculate typicality
+        typ = np.sum(np.apply_along_axis(lambda x: simFun(rep, x), 1, reps_))
+
+        typicalities[i] = typ
+
+    return typicalities
+
+
+def feature_select(rep, b=0.0, d=0.8):
+    """
+    Return an logical array for the features selected in rep based on the
+    threshold activation b and the a threshold porotion of d.
+    """
+    # Binarize representation
+    rep = rep > b
+
+    # Sum features across samples
+    repCount = np.sum(rep, axis=0)
+
+    # Return which features exceed proportion
+    return repCount > (rep.shape[0] * d)
+
+
+def redist_evidence(
+    testRep, targetRep, altRep, simFun, b=0.0, d=0.8, dist_penalty=False
+):
+    """
+    Calculate evidence that testRep is the category targetRep against the
+    alternative altRep given redundancy and distinctiveness using a threshold
+    activation b and a threshold proportion of d.
+    """
+    # Determine what features each category has
+    targetFeatures = feature_select(targetRep, b=b, d=d)
+
+    # Filter for selected features in the test representation
+    testRepSelected = testRep[targetFeatures]
+    targetRepsSelected = targetRep[:, targetFeatures]
+
+    # Calculate similarity between test and target representations
+    sim = np.sum(
+        np.apply_along_axis(
+            lambda x: simFun(x, testRepSelected), 1, targetRepsSelected
+        )
+    )
+
+    if dist_penalty:
+        altFeatures = feature_select(altRep, b=b, d=d)
+
+        # Find conjunctions between target and alternative
+        overlap = np.logical_and(targetFeatures, altFeatures)
+
+        # Select features that are overlapped
+        testOverlapRep = testRep[overlap]
+        altOverlapRep = altRep[:, overlap]
+
+        # Calculate similarity between test and alternative
+        distPenalty = np.sum(
+            np.apply_along_axis(
+                lambda x: simFun(x, testOverlapRep), 1, altOverlapRep
+            )
+        )
+
+        sim = sim - distPenalty
+
+    return sim
+
+
+def sim_prob(rep, cat1Rep, cat2Rep, simFun, equalize=False, nExemplars=None):
     """
     Return a probability of responding one of two categories represented by
     cat1Rep and cat2Rep to a given representation rep. Assumes that the first
@@ -158,8 +326,8 @@ def sim_prob(rep, cat1Rep, cat2Rep, equalize=False, nExemplars=None):
                 )
             ]
 
-    rep1 = np.sum(np.apply_along_axis(lambda x: gcm_sim(rep, x), 1, cat1Rep))
-    rep2 = np.sum(np.apply_along_axis(lambda x: gcm_sim(rep, x), 1, cat2Rep))
+    rep1 = np.sum(np.apply_along_axis(lambda x: simFun(rep, x), 1, cat1Rep))
+    rep2 = np.sum(np.apply_along_axis(lambda x: simFun(rep, x), 1, cat2Rep))
 
     return rep1 / (rep1 + rep2), rep2 / (rep1 + rep2)
 
@@ -176,3 +344,17 @@ def LBA_deterministic(d1, d2, k=0, b=1, t0=0):
         return 1, rt1
     else:
         return 2, rt2
+
+
+def get_evidence(rep, catRep, simFun, maxExemplars=None):
+    """
+    Return evidence for this catRep given the rep using simFun. If maxExemplars
+    is not None, then limit the number of exemplars in the category.
+    """
+    if maxExemplars is not None and maxExemplars < catRep.shape[0]:
+        choices = np.random.choice(
+            catRep.shape[0], maxExemplars, replace=False
+        )
+        catRep = catRep[choices]
+
+    return np.sum(np.apply_along_axis(lambda x: simFun(rep, x), 1, catRep))
