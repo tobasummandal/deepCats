@@ -1,6 +1,8 @@
 from numpy import average
 import tensorflow as tf
 from tensorflow.keras import layers
+import os
+import shutil
 
 
 def make_output_model(model, average_pooling=True, flatten=True):
@@ -10,17 +12,13 @@ def make_output_model(model, average_pooling=True, flatten=True):
         if isinstance(layer, layers.Conv2D):
             dataFormat = layer.data_format
             if average_pooling:
-                layer = layers.GlobalAvgPool2D(data_format=dataFormat)(
-                    layer.output
-                )
+                layer = layers.GlobalAvgPool2D(data_format=dataFormat)(layer.output)
 
             if flatten:
                 if average_pooling:
                     layer = layers.Flatten(data_format=dataFormat)(layer)
                 else:
-                    layer = layers.Flatten(data_format=dataFormat)(
-                        layer.output
-                    )
+                    layer = layers.Flatten(data_format=dataFormat)(layer.output)
 
             if average_pooling or flatten:
                 outputs.append(layer)
@@ -30,3 +28,66 @@ def make_output_model(model, average_pooling=True, flatten=True):
             outputs.append(layer.output)
 
     return tf.keras.Model(model.input, outputs)
+
+
+def add_CUB200_data(source_dir, target_dir):
+    """
+    Add CUB200 data from the source_dir to the target_dir, empties bird
+    directory in target_dir and copies images for the source_dir into the train
+    val directories in target_dir according to the train_test_split file.
+    """
+    # Empty the bird directory in target_dir
+    birdDir = "0085_bird"
+    train_dir = os.path.join(target_dir, "train", birdDir)
+    val_dir = os.path.join(target_dir, "val", birdDir)
+    test_dir = os.path.join(target_dir, "test", birdDir)
+
+    for dir in [train_dir, val_dir, test_dir]:
+        for file in os.listdir(dir):
+            # Recursively remove
+            if os.path.isdir(os.path.join(dir, file)):
+                shutil.rmtree(os.path.join(dir, file))
+            else:
+                os.remove(os.path.join(dir, file))
+
+    # Load info files in source_dir
+    with open(os.path.join(source_dir, "train_test_split.txt"), "r") as f:
+        splitInfo = f.readlines()
+
+    with open(os.path.join(source_dir, "images.txt"), "r") as f:
+        images = f.readlines()
+
+    # Loop through images
+    for img, split in zip(images, splitInfo):
+        img = img.split(" ")[1].strip()
+        split = split.split(" ")[1].strip()
+
+        # Check if intermediate directories exist
+        trainDir = os.path.join(target_dir, "train", birdDir, img.split("/")[0])
+        valDir = os.path.join(target_dir, "val", birdDir, img.split("/")[0])
+        testDir = os.path.join(target_dir, "test", birdDir, img.split("/")[0])
+
+        if not os.path.exists(trainDir):
+            os.makedirs(trainDir)
+        if not os.path.exists(valDir):
+            os.makedirs(valDir)
+        if not os.path.exists(testDir):
+            os.makedirs(testDir)
+
+        # Copy image to correct directory
+        if split == "1":
+            src = os.path.join(source_dir, "images", img)
+            dst = os.path.join(train_dir, img)
+            shutil.copy(src, dst)
+        elif split == "0":
+            src = os.path.join(source_dir, "images", img)
+            valDst = os.path.join(val_dir, img)
+            testDst = os.path.join(test_dir, img)
+            shutil.copy(src, valDst)
+            shutil.copy(src, testDst)
+
+    return None
+
+
+if __name__ == "__main__":
+    add_CUB200_data("./images/CUB_200_2011", "./images/ecoset")
