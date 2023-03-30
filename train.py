@@ -18,7 +18,7 @@ def create_dataset(directory):
     for folder in basicClasses:
         files = os.listdir(os.path.join(directory, folder))
         if os.path.isdir(os.path.join(directory, folder, files[0])):
-            nBirds = len(files)
+            nSub = len(files) + 1 # +1 for non-bird
             break
 
     imgPaths = []
@@ -54,7 +54,7 @@ def create_dataset(directory):
         else:  # Not birds
             for file in files:
                 imgPaths.append(os.path.join(directory, folder, file))
-                labels.append((i, nBirds))
+                labels.append((i, nSub))
                 basicCount += 1
 
         basicCounts = np.append(basicCounts, basicCount)
@@ -80,7 +80,7 @@ def create_dataset(directory):
         x = tf.transpose(x, (2, 0, 1))
 
         # One-hot encode labels
-        y = (tf.one_hot(y[0], nBasic + 1), tf.one_hot(y[1], nBirds + 1))
+        y = (tf.one_hot(y[0], nBasic + 1), tf.one_hot(y[1], nSub + 1))
 
         return x, y
 
@@ -96,11 +96,11 @@ def create_dataset(directory):
         .batch(32)
     )
 
-    for batch in ds.take(1):
-        print(batch[0].shape)
-        print(batch[1])
+    # Calculate category weights
+    basicWeights = np.sum(basicCounts) / (nBasic + 1) / basicCounts
+    subWeights = np.sum(subCounts) / (nSub + 1) / subCounts
 
-    return ds
+    return ds, basicWeights, subWeights
 
 
 if __name__ == "__main__":
