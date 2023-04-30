@@ -89,5 +89,58 @@ def add_CUB200_data(source_dir, target_dir):
     return None
 
 
+def split_CUB200_data(source_dir, target_dir):
+    """
+    Split CUB200 data from the source_dir into the train and val directories in
+    target_dir according to the split file.
+    """
+    # Load info files in source_dir
+    with open(os.path.join(source_dir, "train_test_split.txt"), "r") as f:
+        splitInfo = f.readlines()
+
+    with open(os.path.join(source_dir, "images.txt"), "r") as f:
+        images = f.readlines()
+
+    # Check if target_dir exists, make it if not
+    if not os.path.exists(target_dir):
+        os.makedirs(target_dir)
+
+    # Loop through images
+    trainImgCount = 0
+    valImgCount = 0
+    for img, split in zip(images, splitInfo):
+        img = img.split(" ")[1].strip()
+        split = split.split(" ")[1].strip()
+        trainVal = "train" if split == "1" else "val"
+
+        if trainVal == "train":
+            trainImgCount += 1
+        else:
+            valImgCount += 1
+
+        # Check if directory exists
+        className = img.split("/")[0].strip()
+        targetDir = os.path.join(target_dir, trainVal, className)
+        if not os.path.exists(targetDir):
+            os.makedirs(targetDir)
+
+        # Copy image to correct directory
+        src = os.path.join(source_dir, "images", img)
+        dst = os.path.join(targetDir, img.split("/")[-1])
+
+        shutil.copy(src, dst)
+
+    # Count how many categories there are
+    categories = os.listdir(os.path.join(target_dir, "train"))
+    nCategories = len(categories)
+
+    # Print info
+    print(f"Found {trainImgCount} training images.")
+    print(f"Found {valImgCount} validation images.")
+    print(f"Split across {nCategories} categories.")
+
+    return None
+
+
 if __name__ == "__main__":
-    add_CUB200_data("./images/CUB_200_2011", "./images/ecoset")
+    split_CUB200_data("./images/CUB_200_2011", "./images/CUB200Split")
