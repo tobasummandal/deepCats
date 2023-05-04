@@ -120,7 +120,7 @@ def split_CUB200_data(source_dir, target_dir):
 
         # Check if directory exists
         className = img.split("/")[0].strip()
-        targetDir = os.path.join(target_dir, trainVal, className)
+        targetDir = os.path.join(target_dir, trainVal, f"CUB_{className}")
         if not os.path.exists(targetDir):
             os.makedirs(targetDir)
 
