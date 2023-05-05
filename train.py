@@ -117,9 +117,7 @@ def create_nested_dataset(directory, size=224, channel_first=False, batch_size=3
     return ds, basicWeights, subWeights
 
 
-def create_flat_dataset(
-    directory, size=224, channel_first=False, batch_size=32, augment=False
-):
+def create_flat_dataset(directory, size=224, channel_first=False, batch_size=32):
     """
     Return a dataset and class weights from directory where all images are
     scaled to size x size.
@@ -157,19 +155,8 @@ def create_flat_dataset(
         # Cast to float
         x = tf.cast(x, tf.float32)
 
-        # Augment and resize
-        if augment:
-            # Resize to slightly larger
-            x = tf.keras.preprocessing.image.smart_resize(x, (size + 32, size + 32))
-
-            # Random crop
-            x = tf.image.random_crop(x, (size, size, 3))
-
-            # Random flip
-            x = tf.image.random_flip_left_right(x)
-        else:  # No augment
-            # Resize
-            x = tf.keras.preprocessing.image.smart_resize(x, (size, size))
+        # Resize
+        x = tf.keras.preprocessing.image.smart_resize(x, (size, size))
 
         # Center features
         x = 2 * (x / 255 - 0.5)
@@ -282,7 +269,7 @@ class weighted_cce(tf.keras.losses.Loss):
         return tf.keras.losses.CategoricalCrossentropy()(y_true, y_pred, weights)
 
 
-def train_ecocub_model(model, class_weights, lr, callbacks=[], initial_train=False):
+def train_ecocub_model(model, class_weights, lr, callbacks=[], initial_train=False, batch_norm=False):
     """
     Take an AlexNet model and perform transfer learning on it to classify the
     ecoCUB dataset.
@@ -294,6 +281,9 @@ def train_ecocub_model(model, class_weights, lr, callbacks=[], initial_train=Fal
     # Get model output at fc dropout layer
     x = model.layers[-5].output
 
+    if batch_norm:
+        x = tf.keras.layers.BatchNormalization()(x)
+
     # Add new classification layer
     weightInit = tf.keras.initializers.TruncatedNormal(stddev=0.005)
     x = tf.keras.layers.Conv2D(
@@ -302,7 +292,7 @@ def train_ecocub_model(model, class_weights, lr, callbacks=[], initial_train=Fal
         padding="same",
         activation=None,
         name="birdFC",
-        kernel_regularizer=tf.keras.regularizers.l2(0.001),
+        kernel_regularizer=tf.keras.regularizers.l2(0.0005),
         kernel_initializer=weightInit,
         bias_initializer=tf.keras.initializers.zeros(),
     )(x)
@@ -336,7 +326,7 @@ def train_ecocub_model(model, class_weights, lr, callbacks=[], initial_train=Fal
 
     # Unfreeze penultimate layer and add regularizer
     model.layers[-6].trainable = True
-    model.layers[-6].kernel_regularizer = tf.keras.regularizers.l2(0.001)
+    model.layers[-6].kernel_regularizer = tf.keras.regularizers.l2(0.0005)
 
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=lr, epsilon=0.1),
@@ -359,18 +349,24 @@ def train_ecocub_model(model, class_weights, lr, callbacks=[], initial_train=Fal
 
 
 if __name__ == "__main__":
-    # Training seed
     seed = 1
+    augment = False
+    batchNorm = True
+
+    # Training seed
     tf.random.set_seed(seed)
+    size = 256 if augment else 224
 
     # Create dataset
-    trainDs, weights = create_flat_dataset("./images/ecoCUB/train")
-    valDs, _ = create_flat_dataset("./images/ecoCUB/val")
+    trainDs, weights = create_flat_dataset("./images/ecoCUB/train", size=size)
+    valDs, _ = create_flat_dataset("./images/ecoCUB/val", size=size)
 
     weightPath = f"./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_{seed:02}/model.ckpt_epoch89"
     model = ecoset.make_alex_net_v2(
         weights_path=weightPath,
         softmax=True,
+        augment=augment,
+        input_shape=(size, size, 3),
     )
 
     # Make callbacks
@@ -386,5 +382,9 @@ if __name__ == "__main__":
 
     # Train model
     fit = train_ecocub_model(
-        model=model, class_weights=weights, lr=0.0001, callbacks=callbacks
+        model=model,
+        class_weights=weights,
+        lr=0.0001,
+        callbacks=callbacks,
+        batch_norm=batchNorm,
     )
