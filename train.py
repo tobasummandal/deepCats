@@ -117,7 +117,9 @@ def create_nested_dataset(directory, size=224, channel_first=False, batch_size=3
     return ds, basicWeights, subWeights
 
 
-def create_flat_dataset(directory, size=224, channel_first=False, batch_size=32):
+def create_flat_dataset(
+    directory, size=224, channel_first=False, batch_size=32, filter=None
+):
     """
     Return a dataset and class weights from directory where all images are
     scaled to size x size.
@@ -131,6 +133,9 @@ def create_flat_dataset(directory, size=224, channel_first=False, batch_size=32)
     labels = []
     classCounts = np.array([])
     for i, folder in enumerate(classes):
+        if filter is not None and folder not in filter:
+            continue
+
         # List files in folder
         files = os.listdir(os.path.join(directory, folder))
         files.sort()
@@ -269,7 +274,9 @@ class weighted_cce(tf.keras.losses.Loss):
         return tf.keras.losses.CategoricalCrossentropy()(y_true, y_pred, weights)
 
 
-def train_ecocub_model(model, class_weights, lr, callbacks=[], initial_train=False, batch_norm=False):
+def train_ecocub_model(
+    model, class_weights, lr, callbacks=[], initial_train=False, batch_norm=False
+):
     """
     Take an AlexNet model and perform transfer learning on it to classify the
     ecoCUB dataset.
@@ -348,10 +355,15 @@ def train_ecocub_model(model, class_weights, lr, callbacks=[], initial_train=Fal
     return fit
 
 
+def exp_schedule(epoch):
+    lr = 0.001
+    return lr * tf.math.pow(0.1, epoch)
+
+
 if __name__ == "__main__":
     seed = 1
     augment = False
-    batchNorm = True
+    batchNorm = False
 
     # Training seed
     tf.random.set_seed(seed)
@@ -378,13 +390,14 @@ if __name__ == "__main__":
     csvLogger = tf.keras.callbacks.CSVLogger(
         f"./models/deepCats/AlexNet/seed{seed:02}/training.csv"
     )
-    callbacks = [checkpoint, csvLogger]
+    schedule = tf.keras.callbacks.LearningRateScheduler(exp_schedule, verbose=1)
+    callbacks = [checkpoint, csvLogger, schedule]
 
     # Train model
     fit = train_ecocub_model(
         model=model,
         class_weights=weights,
-        lr=0.0001,
+        lr=0.001,
         callbacks=callbacks,
         batch_norm=batchNorm,
     )
