@@ -11,16 +11,35 @@ def make_alex_net_v2(
     output_shape=565,
     weights_path=None,
     softmax=False,
+    augment=False,
 ):
     inputs = tf.keras.Input(shape=input_shape)
-    x = layers.Conv2D(
-        64,
-        (11, 11),
-        strides=(4, 4),
-        padding="valid",
-        activation="relu",
-        name="conv1",
-    )(inputs)
+
+    if augment:
+        # Add random flip
+        x = tf.keras.layers.RandomFlip("horizontal")(inputs)
+
+        # Add random crop
+        x = tf.keras.layers.RandomCrop(224, 224)(x)
+
+        x = layers.Conv2D(
+            64,
+            (11, 11),
+            strides=(4, 4),
+            padding="valid",
+            activation="relu",
+            name="conv1",
+        )(x)
+    else:
+        x = layers.Conv2D(
+            64,
+            (11, 11),
+            strides=(4, 4),
+            padding="valid",
+            activation="relu",
+            name="conv1",
+        )(inputs)
+
     x = layers.MaxPool2D(pool_size=(3, 3), strides=(2, 2), name="pool1")(x)
 
     x = layers.Conv2D(
@@ -85,7 +104,7 @@ def make_alex_net_v2(
         output_shape,
         (1, 1),
         padding="same",
-        activation="relu",
+        activation=None,
         name="fc8",
     )(x)
     x = layers.GlobalAveragePooling2D()(x)
@@ -299,9 +318,7 @@ def load_vNet_weights(model, weights_path):
             weightKeys = [
                 key
                 for key in dtypes.keys()
-                if "l" + layerN in key
-                and "Adam" not in key
-                and "GroupNorm" not in key
+                if "l" + layerN in key and "Adam" not in key and "GroupNorm" not in key
             ]
 
             # Set weights
@@ -313,9 +330,7 @@ def load_vNet_weights(model, weights_path):
             weightKeys = [
                 key
                 for key in dtypes.keys()
-                if "l" + layerN in key
-                and "Adam" not in key
-                and "GroupNorm" in key
+                if "l" + layerN in key and "Adam" not in key and "GroupNorm" in key
             ]
             weightKeys.sort()
 
@@ -326,9 +341,7 @@ def load_vNet_weights(model, weights_path):
         elif isinstance(layer, layers.Dense):
             # Get the readout data
             weightKeys = [
-                key
-                for key in dtypes.keys()
-                if "readout" in key and "Adam" not in key
+                key for key in dtypes.keys() if "readout" in key and "Adam" not in key
             ]
             weightKeys.sort()
 
@@ -385,3 +398,43 @@ def preprocess_vNet(image):
     image = np.transpose(image, (0, 3, 1, 2))
 
     return image
+
+
+if __name__ == "__main__":
+    import numpy as np
+
+    model = make_alex_net_v2(
+        weights_path="./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_01/model.ckpt_epoch89",
+        softmax=True,
+    )
+
+    def _parse_image(x):
+        # Decode image
+        x = tf.io.read_file(x)
+        x = tf.io.decode_image(x, channels=3)
+
+        # Add batch channel
+        x = tf.expand_dims(x, 0)
+
+        # Cast to float
+        x = tf.cast(x, tf.float32)
+
+        # Resize
+        x = tf.keras.preprocessing.image.smart_resize(x, (224, 224))
+
+        # Center features
+        x = 2 * (x / 255 - 0.5)
+
+        return x
+
+    # Load a test image
+    img = _parse_image("./images/bird2.jpg")
+
+    # Predict
+    preds = model.predict(img)
+
+    # Top 5
+    preds = tf.nn.top_k(preds, k=5)
+
+    # Print results
+    print(preds)
