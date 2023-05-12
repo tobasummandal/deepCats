@@ -366,10 +366,7 @@ if __name__ == "__main__":
         description="Train a model for the deep cats project."
     )
     parser.add_argument(
-        "--script",
-        type=str,
-        help="type of model to train",
-        choices=["birder"]
+        "--script", type=str, help="type of model to train", choices=["birder"]
     )
     parser.add_argument(
         "--seed",
@@ -389,6 +386,12 @@ if __name__ == "__main__":
         help="whether to use batch normalization",
         default=False,
     )
+    parser.add_argument(
+        "--dataDir",
+        type=str,
+        help="directory containing the training data",
+        default="./images/",
+    )
 
     args = parser.parse_args()
 
@@ -397,14 +400,15 @@ if __name__ == "__main__":
     if args.script == "birder":
         augment = args.augment
         batchNorm = args.batchNorm
+        dataDir = args.dataDir
 
         # Training seed
         tf.random.set_seed(seed)
         size = 256 if augment else 224
 
         # Create dataset
-        trainDs, weights = create_flat_dataset("./images/ecoCUB/train", size=size)
-        valDs, _ = create_flat_dataset("./images/ecoCUB/val", size=size, filter="CUB")
+        trainDs, weights = create_flat_dataset(os.path.join(dataDir, "ecoCUB", "train"), size=size)
+        valDs, _ = create_flat_dataset(os.path.join(dataDir, "ecoCUB", "val"), size=size, filter="CUB")
 
         weightPath = f"./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_{seed:02}/model.ckpt_epoch89"
         model = ecoset.make_alex_net_v2(
@@ -439,4 +443,3 @@ if __name__ == "__main__":
             callbacks=callbacks,
             batch_norm=batchNorm,
         )
-        
