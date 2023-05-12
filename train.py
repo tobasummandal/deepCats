@@ -133,7 +133,8 @@ def create_flat_dataset(
     labels = []
     classCounts = np.array([])
     for i, folder in enumerate(classes):
-        if filter is not None and folder not in filter:
+        if (filter is not None) and (filter not in folder):
+            classCounts = np.append(classCounts, 0)
             continue
 
         # List files in folder
@@ -149,8 +150,11 @@ def create_flat_dataset(
         classCounts = np.append(classCounts, imgCount)
 
     # Calculate class weights
-    weights = np.sum(classCounts) / (len(classes) * classCounts)
-    weights = tf.convert_to_tensor(weights, dtype=tf.float32)
+    if filter is None:
+        weights = np.sum(classCounts) / (len(classes) * classCounts)
+        weights = tf.convert_to_tensor(weights, dtype=tf.float32)
+    else:
+        weights = None
 
     def _parse_image(x, y):
         # Decode image
@@ -355,49 +359,84 @@ def train_ecocub_model(
     return fit
 
 
-def exp_schedule(epoch):
-    lr = 0.001
-    return lr * tf.math.pow(0.1, epoch)
-
-
 if __name__ == "__main__":
-    seed = 1
-    augment = False
-    batchNorm = False
+    import argparse
 
-    # Training seed
-    tf.random.set_seed(seed)
-    size = 256 if augment else 224
-
-    # Create dataset
-    trainDs, weights = create_flat_dataset("./images/ecoCUB/train", size=size)
-    valDs, _ = create_flat_dataset("./images/ecoCUB/val", size=size)
-
-    weightPath = f"./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_{seed:02}/model.ckpt_epoch89"
-    model = ecoset.make_alex_net_v2(
-        weights_path=weightPath,
-        softmax=True,
-        augment=augment,
-        input_shape=(size, size, 3),
+    parser = argparse.ArgumentParser(
+        description="Train a model for the deep cats project."
+    )
+    parser.add_argument(
+        "--script",
+        type=str,
+        help="type of model to train",
+        choices=["birder"]
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        help="seed to use for training",
+        required=True,
+    )
+    parser.add_argument(
+        "--augment",
+        type=bool,
+        help="whether to use data augmentation",
+        default=False,
+    )
+    parser.add_argument(
+        "--batchNorm",
+        type=bool,
+        help="whether to use batch normalization",
+        default=False,
     )
 
-    # Make callbacks
-    checkpoint = tf.keras.callbacks.ModelCheckpoint(
-        f"./models/deepCats/AlexNet/seed{seed:02}/epoch{{epoch:02d}}-val_loss{{val_loss:.2f}}.hdf5",
-        monitor="val_loss",
-        save_freq="epoch",
-    )
-    csvLogger = tf.keras.callbacks.CSVLogger(
-        f"./models/deepCats/AlexNet/seed{seed:02}/training.csv"
-    )
-    schedule = tf.keras.callbacks.LearningRateScheduler(exp_schedule, verbose=1)
-    callbacks = [checkpoint, csvLogger, schedule]
+    args = parser.parse_args()
 
-    # Train model
-    fit = train_ecocub_model(
-        model=model,
-        class_weights=weights,
-        lr=0.001,
-        callbacks=callbacks,
-        batch_norm=batchNorm,
-    )
+    seed = args.seed
+
+    if args.script == "birder":
+        augment = args.augment
+        batchNorm = args.batchNorm
+
+        # Training seed
+        tf.random.set_seed(seed)
+        size = 256 if augment else 224
+
+        # Create dataset
+        trainDs, weights = create_flat_dataset("./images/ecoCUB/train", size=size)
+        valDs, _ = create_flat_dataset("./images/ecoCUB/val", size=size, filter="CUB")
+
+        weightPath = f"./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_{seed:02}/model.ckpt_epoch89"
+        model = ecoset.make_alex_net_v2(
+            weights_path=weightPath,
+            softmax=True,
+            augment=augment,
+            input_shape=(size, size, 3),
+        )
+
+        # Make callbacks
+        checkpoint = tf.keras.callbacks.ModelCheckpoint(
+            f"./models/deepCats/AlexNet/seed{seed:02}/epoch{{epoch:02d}}-val_loss{{val_loss:.2f}}.hdf5",
+            monitor="val_loss",
+            save_freq="epoch",
+        )
+        csvLogger = tf.keras.callbacks.CSVLogger(
+            f"./models/deepCats/AlexNet/seed{seed:02}/training.csv", append=True
+        )
+
+        def exp_schedule(epoch):
+            lr = 0.001
+            return lr * tf.math.pow(0.5, epoch)
+
+        schedule = tf.keras.callbacks.LearningRateScheduler(exp_schedule, verbose=1)
+        callbacks = [checkpoint, csvLogger, schedule]
+
+        # Train model
+        fit = train_ecocub_model(
+            model=model,
+            class_weights=weights,
+            lr=0.001,
+            callbacks=callbacks,
+            batch_norm=batchNorm,
+        )
+        
