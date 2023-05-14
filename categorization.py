@@ -2,11 +2,11 @@ import os
 import PIL.Image as Image
 import numpy as np
 import tensorflow as tf
+import pandas as pd
+
 
 # List folders
-def build_categories_from_ecoset(
-    path, synsets=None, maxImgs=None, includeSub=True
-):
+def build_categories_from_ecoset(path, synsets=None, maxImgs=None, includeSub=True):
     """
     Return dictionary of the images and counts for each category in path.
     Only keep synsets in the list synsets if defined and only keep the first
@@ -32,9 +32,7 @@ def build_categories_from_ecoset(
                         # Filter synsets
                         if synsets is not None:
                             subCats = [
-                                subCat
-                                for subCat in subCats
-                                if subCat in synsets
+                                subCat for subCat in subCats if subCat in synsets
                             ]
 
                         # Fill dictionary with each category and its images
@@ -54,18 +52,13 @@ def build_categories_from_ecoset(
                         imgs = os.listdir(os.path.join(path, name, name2))
 
                         if synsets is not None:
-                            imgs = [
-                                img
-                                for img in imgs
-                                if img.split("_")[0] in synsets
-                            ]
+                            imgs = [img for img in imgs if img.split("_")[0] in synsets]
 
                         if maxImgs is not None:
                             imgs = imgs[:maxImgs]
 
                         cats[name][name2] = [
-                            os.path.join(path, name, name2, img)
-                            for img in imgs
+                            os.path.join(path, name, name2, img) for img in imgs
                         ]
 
     # Get counts of each image in each category
@@ -81,6 +74,43 @@ def build_categories_from_ecoset(
                 counts[cat][subCat] = len(cats[cat][subCat])
 
     return cats, counts
+
+
+def build_df_from_dir(directory, cats=[]):
+    """
+    Return a dataframe where each row is an image recursively where each row
+    is an image with extra columns based on how deep in the directory structure
+    it is.
+    """
+    # Create pandas dataframe
+    df = pd.DataFrame(
+        columns=["path", "name", "cat1"] + [f"cat{i + 2}" for i in range(len(cats))]
+    )
+
+    fileList = os.listdir(directory)
+    # Ignore hidden files
+    fileList = [file for file in fileList if not file.startswith(".")]
+
+    for name in fileList:
+        if os.path.isdir(os.path.join(directory, name)):
+            newRow = build_df_from_dir(
+                os.path.join(directory, name), cats=cats + [name]
+            )
+            newRow
+        else:
+            newRow = pd.DataFrame(
+                [[os.path.join(directory, name), name] + cats + [name]],
+                columns=["path", "name", "cat1"]
+                + [f"cat{i + 2}" for i in range(len(cats))],
+            )
+
+        df = pd.concat([df, newRow], sort=False, ignore_index=True)
+
+    # If name is equal to the last column, remove last column
+    if df["name"].equals(df.iloc[:, -1]):
+        df = df.iloc[:, :-1]
+
+    return df
 
 
 def get_images_from_cat(cats, preprocFun=None):
@@ -114,7 +144,7 @@ def gcm_sim(rep1, rep2, r=2.0, c=1.0, p=1.0):
 
     dist = np.sum(weights * (np.abs(rep1 - rep2) ** r)) ** (1.0 / r)
 
-    return np.exp(-c * dist ** p)
+    return np.exp(-c * dist**p)
 
 
 def prod_sim(rep1, rep2):
@@ -214,9 +244,7 @@ def calculate_typicality(reps, simFun, nExemplars=None):
 
         if nExemplars is not None:
             # Keep only nExemplars
-            reps_ = reps_[
-                np.random.choice(reps_.shape[0], nExemplars, replace=False)
-            ]
+            reps_ = reps_[np.random.choice(reps_.shape[0], nExemplars, replace=False)]
 
         # Calculate typicality
         typ = np.sum(np.apply_along_axis(lambda x: simFun(rep, x), 1, reps_))
@@ -258,9 +286,7 @@ def redist_evidence(
 
     # Calculate similarity between test and target representations
     sim = np.sum(
-        np.apply_along_axis(
-            lambda x: simFun(x, testRepSelected), 1, targetRepsSelected
-        )
+        np.apply_along_axis(lambda x: simFun(x, testRepSelected), 1, targetRepsSelected)
     )
 
     if dist_penalty:
@@ -275,9 +301,7 @@ def redist_evidence(
 
         # Calculate similarity between test and alternative
         distPenalty = np.sum(
-            np.apply_along_axis(
-                lambda x: simFun(x, testOverlapRep), 1, altOverlapRep
-            )
+            np.apply_along_axis(lambda x: simFun(x, testOverlapRep), 1, altOverlapRep)
         )
 
         sim = sim - distPenalty
@@ -303,27 +327,19 @@ def sim_prob(rep, cat1Rep, cat2Rep, simFun, equalize=False, nExemplars=None):
         cat2Rep = np.concatenate(cat2Rep, axis=0)
 
     if nExemplars is not None and nExemplars < cat1Rep.shape[0]:
-        cat1Rep = cat1Rep[
-            np.random.choice(cat1Rep.shape[0], nExemplars, False)
-        ]
+        cat1Rep = cat1Rep[np.random.choice(cat1Rep.shape[0], nExemplars, False)]
 
     if nExemplars is not None and nExemplars < cat2Rep.shape[0]:
-        cat2Rep = cat2Rep[
-            np.random.choice(cat2Rep.shape[0], nExemplars, False)
-        ]
+        cat2Rep = cat2Rep[np.random.choice(cat2Rep.shape[0], nExemplars, False)]
 
     if equalize:
         if cat1Rep.shape[0] < cat2Rep.shape[0]:
             cat2Rep = cat2Rep[
-                np.random.choice(
-                    cat2Rep.shape[0], cat1Rep.shape[0], replace=False
-                )
+                np.random.choice(cat2Rep.shape[0], cat1Rep.shape[0], replace=False)
             ]
         else:
             cat1Rep = cat1Rep[
-                np.random.choice(
-                    cat1Rep.shape[0], cat2Rep.shape[0], replace=False
-                )
+                np.random.choice(cat1Rep.shape[0], cat2Rep.shape[0], replace=False)
             ]
 
     rep1 = np.sum(np.apply_along_axis(lambda x: simFun(rep, x), 1, cat1Rep))
@@ -352,9 +368,12 @@ def get_evidence(rep, catRep, simFun, maxExemplars=None):
     is not None, then limit the number of exemplars in the category.
     """
     if maxExemplars is not None and maxExemplars < catRep.shape[0]:
-        choices = np.random.choice(
-            catRep.shape[0], maxExemplars, replace=False
-        )
+        choices = np.random.choice(catRep.shape[0], maxExemplars, replace=False)
         catRep = catRep[choices]
 
     return np.sum(np.apply_along_axis(lambda x: simFun(rep, x), 1, catRep))
+
+
+if __name__ == "__main__":
+    df = build_df_from_dir("./images/deepCats")
+    df
