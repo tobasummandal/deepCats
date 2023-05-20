@@ -429,7 +429,20 @@ def train_ecocub_model(
     for layer in model.layers:
         layer.trainable = False
 
-    # TODO: CHECK WHETHER THIS SHOULD BE -4 OR NOT
+    # Get old weights in fc8
+    oldWeights, oldBias = model.layers[-4].get_weights()
+
+    # Delete the old bird node (index 25)
+    newWeights = np.delete(oldWeights, 25, axis=-1)
+    newBias = np.delete(oldBias, 25)
+
+    # Add new nodes
+    weightInit = tf.keras.initializers.TruncatedNormal(stddev=0.005)
+    newWeights = np.concatenate(
+        [newWeights, weightInit(shape=(1, 1, 4096, 200)).numpy()], axis=-1
+    )
+    newBias = np.concatenate([newBias, np.zeros(200)])
+
     # Get model output at fc dropout layer
     x = model.layers[-5].output
 
@@ -437,7 +450,6 @@ def train_ecocub_model(
         x = tf.keras.layers.BatchNormalization()(x)
 
     # Add new classification layer
-    weightInit = tf.keras.initializers.TruncatedNormal(stddev=0.005)
     x = tf.keras.layers.Conv2D(
         764,
         (1, 1),
@@ -445,8 +457,6 @@ def train_ecocub_model(
         activation=None,
         name="birdFC",
         kernel_regularizer=tf.keras.regularizers.l2(0.0005),
-        kernel_initializer=weightInit,
-        bias_initializer=tf.keras.initializers.zeros(),
     )(x)
     x = tf.keras.layers.GlobalAveragePooling2D()(x)
     x = tf.keras.layers.Flatten()(x)
@@ -454,6 +464,9 @@ def train_ecocub_model(
 
     # Create new model
     model = tf.keras.Model(inputs=model.input, outputs=[x])
+
+    # Change birdFC layer weights and bias
+    model.get_layer("birdFC").set_weights([newWeights, newBias])
 
     # Turn class weights into dictionary
     class_weights = {i: class_weights[i] for i in range(len(class_weights))}
