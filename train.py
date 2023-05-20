@@ -94,8 +94,8 @@ def create_nested_dataset(directory, size=224, channel_first=False, batch_size=3
         tf.data.Dataset.from_generator(
             lambda: zip(imgPaths, labels),
             output_signature=(
-                tf.TensorSpec(shape=(), dtype=tf.string),
-                tf.TensorSpec(shape=(2,), dtype=tf.int32),
+                tf.TensorSpec(shape=(), dtype=tf.string), # type: ignore
+                tf.TensorSpec(shape=(), dtype=tf.int32), # type: ignore
             ),
         )
         .shuffle(len(imgPaths))
@@ -182,14 +182,12 @@ def create_flat_dataset(
 
         return x, y
 
+    # Turn lists into tensors
+    imgPaths = tf.convert_to_tensor(imgPaths, dtype=tf.string)
+    labels = tf.convert_to_tensor(labels, dtype=tf.int32)
+
     ds = (
-        tf.data.Dataset.from_generator(
-            lambda: zip(imgPaths, labels),
-            output_signature=(
-                tf.TensorSpec(shape=(), dtype=tf.string),
-                tf.TensorSpec(shape=(), dtype=tf.int32),
-            ),
-        )
+        tf.data.Dataset.from_tensor_slices((imgPaths, labels))
         .shuffle(len(imgPaths))
         .map(_parse_image)
         .batch(batch_size)
