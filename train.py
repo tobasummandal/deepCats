@@ -2,6 +2,7 @@ import tensorflow as tf
 import os
 import numpy as np
 import ecoset
+from sklearn.utils.class_weight import compute_sample_weight
 
 
 def create_nested_dataset(directory, size=224, channel_first=False, batch_size=32):
@@ -17,6 +18,7 @@ def create_nested_dataset(directory, size=224, channel_first=False, batch_size=3
     nBasic = len(basicClasses)
 
     # Find the basic class that has subdirectories and count the number
+    nSub = 0
     for folder in basicClasses:
         files = os.listdir(os.path.join(directory, folder))
         if os.path.isdir(os.path.join(directory, folder, files[0])):
@@ -26,6 +28,7 @@ def create_nested_dataset(directory, size=224, channel_first=False, batch_size=3
     imgPaths = []
     labels = []
     basicCounts = np.array([])
+    subCounts = np.array([0])
     for i, folder in enumerate(basicClasses):
         basicCount = 0
         # List files in folder
@@ -199,6 +202,134 @@ def create_flat_dataset(
     return ds, weights
 
 
+def create_twohot_dataset(directory, size=224, channel_first=False, batch_size=32):
+    """
+    Return a dataset given a nested directory structure. If the directory
+    contains images, those images will be assigned to that class as one-hot. If
+    the directory contains subdirectories, those subdirectories will be treated
+    as two-hot where the first class is the parent directory and the second
+    class is the subdirectory.
+    """
+    # List folders in directory
+    basicClasses = os.listdir(directory)
+    basicClasses.sort()
+    nBasic = len(basicClasses)
+
+    # Find the basic class that has subdirectories and count subclasses
+    twoHots = {}
+    for i, folder in enumerate(basicClasses):
+        files = os.listdir(os.path.join(directory, folder))
+        if os.path.isdir(os.path.join(directory, folder, files[0])):
+            twoHots[i] = len(files)
+
+    # Get total number of classes
+    nSub = sum(twoHots.values())
+    nClasses = nBasic + nSub
+
+    labels = []
+    imgPaths = []
+    uniqueLabels = []
+    basicCounts = np.array([])
+    subCounts = np.array([])
+    subClassCount = 0
+    for i, folder in enumerate(basicClasses):
+        # List files in folder
+        files = os.listdir(os.path.join(directory, folder))
+        files.sort()
+
+        # Create label
+        label = [i]
+
+        # Check if this directory has directories in it
+        if os.path.isdir(os.path.join(directory, folder, files[0])):
+            # List folders in this directory
+            subClasses = os.listdir(os.path.join(directory, folder))
+            subClasses.sort()
+
+            for subDir in subClasses:
+                # List files in this directory
+                files = os.listdir(os.path.join(directory, folder, subDir))
+                files.sort()
+
+                # Copy label and add an extra label
+                subLabel = label[:]
+                subLabel += [nBasic + subClassCount]
+                subClassCount += 1
+
+                # Add to unique labels
+                uniqueLabels.append(subLabel)
+
+                # Add to labels
+                labels += [subLabel] * len(files)
+
+                # Add to subclass counts
+                subCounts = np.append(subCounts, len(files))
+
+                for file in files:
+                    imgPaths.append(os.path.join(directory, folder, subDir, file))
+
+            # Add to basic class counts
+            basicCounts = np.append(basicCounts, np.sum(subCounts))
+
+        else:
+            # Add to unique labels
+            uniqueLabels.append(label)
+
+            # Add to labels
+            labels += [label] * len(files)
+
+            # Add to class counts
+            basicCounts = np.append(basicCounts, len(files))
+            for file in files:
+                imgPaths.append(os.path.join(directory, folder, file))
+
+    # Convert imgPaths and labels to tensors
+    imgPaths = tf.constant(imgPaths)
+    labels = tf.ragged.constant(labels)
+
+    counts = np.append(basicCounts, subCounts)
+    weights = np.sum(counts) / (len(counts) * counts)
+    weights = tf.convert_to_tensor(weights, dtype=tf.float32)
+
+    def _parse_image(x, y):
+        # Decode image
+        x = tf.io.read_file(x)
+        x = tf.io.decode_image(x, channels=3)
+
+        # Cast to float
+        x = tf.cast(x, tf.float32)
+
+        # Resize
+        x = tf.keras.preprocessing.image.smart_resize(x, (size, size))
+
+        # Center features
+        x = 2 * (x / 255 - 0.5)
+
+        # Transpose to channel first format
+        if channel_first:
+            x = tf.transpose(x, (2, 0, 1))
+
+        # Make one hot label with the first element of y
+        label = tf.one_hot(y[0], len(counts))
+
+        # If y has a second element, turn that into a one hot and add it to y
+        if len(y) > 1:
+            label2 = tf.one_hot(y[1], len(counts))
+            label = tf.add(label, label2)
+
+        return x, label
+
+    ds = (
+        tf.data.Dataset.from_tensor_slices((imgPaths, labels))
+        .shuffle(len(imgPaths))
+        .map(_parse_image)
+        .batch(batch_size)
+        .prefetch(tf.data.AUTOTUNE)
+    )
+
+    return ds, weights
+
+
 def make_expert_model(
     model,
     layer_idx,
@@ -279,7 +410,14 @@ class weighted_cce(tf.keras.losses.Loss):
 
 
 def train_ecocub_model(
-    model, class_weights, lr, callbacks=[], initial_train=False, batch_norm=False
+    model,
+    trainDs,
+    valDs,
+    class_weights,
+    lr,
+    callbacks=[],
+    initial_train=False,
+    batch_norm=False,
 ):
     """
     Take an AlexNet model and perform transfer learning on it to classify the
@@ -289,6 +427,7 @@ def train_ecocub_model(
     for layer in model.layers:
         layer.trainable = False
 
+    # TODO: CHECK WHETHER THIS SHOULD BE -4 OR NOT
     # Get model output at fc dropout layer
     x = model.layers[-5].output
 
@@ -359,6 +498,85 @@ def train_ecocub_model(
     return fit
 
 
+def train_twohot_model(
+    model,
+    trainDs,
+    valDs,
+    class_weights,
+    lr,
+    softmax=True,
+    callbacks=[],
+    batch_norm=False,
+):
+    origKernel, origBias = model.get_layer("fc8").get_weights()
+    weightInit = tf.keras.initializers.TruncatedNormal(
+        stddev=0.005
+    )  # It might be better to sample from old weights
+    newWeights = weightInit(shape=(1, 1, 4096, 200))
+    newBias = tf.keras.initializers.zeros()(shape=(200,))
+
+    # Concatenate
+    newWeights = tf.concat([origKernel, newWeights], axis=3)
+    newBias = tf.concat([origBias, newBias], axis=0)
+
+    # Freeze all layers
+    for layer in model.layers:
+        layer.trainable = False
+
+    # Get model output at fc dropout layer
+    x = model.layers[-4].output
+
+    # Add new classification layer
+    if batch_norm:
+        x = tf.keras.layers.BatchNormalization()(x)
+
+    x = tf.keras.layers.Conv2D(
+        765,
+        (1, 1),
+        padding="same",
+        activation=None,
+        name="twoHotFC",
+        kernel_regularizer=tf.keras.regularizers.l2(0.0005),
+    )(x)
+    x = tf.keras.layers.GlobalAveragePooling2D()(x)
+    x = tf.keras.layers.Flatten()(x)
+
+    if softmax:
+        x = tf.keras.layers.Softmax()(x)
+        loss = tf.keras.losses.CategoricalCrossentropy()
+    else:
+        x = tf.keras.layers.Activation("sigmoid")(x)
+        loss = tf.keras.losses.BinaryCrossentropy()
+
+    # Create new model
+    model = tf.keras.Model(inputs=model.input, outputs=[x])
+
+    # Plugin the old weights with new concatenated
+    model.get_layer("twoHotFC").set_weights([newWeights, newBias])
+
+    # Compile
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=lr, epsilon=0.1),
+        loss=loss,
+        metrics=["accuracy", "top_k_categorical_accuracy"],
+    )
+    model.summary()
+
+    # Turn class weights into dictionary
+    class_weights = {i: class_weights[i] for i in range(len(class_weights))}
+
+    # Train model
+    fit = model.fit(
+        trainDs,
+        epochs=10,
+        validation_data=valDs,
+        callbacks=callbacks,
+        class_weight=class_weights,
+    )
+
+    return fit
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -366,7 +584,10 @@ if __name__ == "__main__":
         description="Train a model for the deep cats project."
     )
     parser.add_argument(
-        "--script", type=str, help="type of model to train", choices=["birder"]
+        "--script",
+        type=str,
+        help="type of model to train",
+        choices=["ecoCubAmnesia", "twoHot"],
     )
     parser.add_argument(
         "--seed",
@@ -397,7 +618,7 @@ if __name__ == "__main__":
 
     seed = args.seed
 
-    if args.script == "birder":
+    if args.script == "ecoCubAmnesia":
         augment = args.augment
         batchNorm = args.batchNorm
         dataDir = args.dataDir
@@ -407,8 +628,12 @@ if __name__ == "__main__":
         size = 256 if augment else 224
 
         # Create dataset
-        trainDs, weights = create_flat_dataset(os.path.join(dataDir, "ecoCUB", "train"), size=size)
-        valDs, _ = create_flat_dataset(os.path.join(dataDir, "ecoCUB", "val"), size=size, filter="CUB")
+        trainDs, weights = create_flat_dataset(
+            os.path.join(dataDir, "ecoCUB", "train"), size=size
+        )
+        valDs, _ = create_flat_dataset(
+            os.path.join(dataDir, "ecoCUB", "val"), size=size, filter="CUB"
+        )
 
         weightPath = f"./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_{seed:02}/model.ckpt_epoch89"
         model = ecoset.make_alex_net_v2(
@@ -438,8 +663,38 @@ if __name__ == "__main__":
         # Train model
         fit = train_ecocub_model(
             model=model,
+            trainDs=trainDs,
+            valDs=valDs,
             class_weights=weights,
             lr=0.001,
             callbacks=callbacks,
             batch_norm=batchNorm,
+        )
+    elif args.script == "twoHot":
+        weightPath = f"./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_{seed:02}/model.ckpt_epoch89"
+        model = ecoset.make_alex_net_v2(
+            weights_path=weightPath,
+            input_shape=(224, 224, 3),
+        )
+
+        trainDs, weights = create_twohot_dataset(
+            os.path.join(args.dataDir, "train"),
+            size=224,
+            channel_first=False,
+            batch_size=32,
+        )
+        valDs, _ = create_twohot_dataset(
+            os.path.join(args.dataDir, "val"),
+            size=224,
+            channel_first=False,
+            batch_size=32,
+        )
+
+        fit = train_twohot_model(
+            model=model,
+            trainDs=trainDs,
+            valDs=valDs,
+            lr=0.0001,
+            class_weights=weights,
+            batch_norm=args.batchNorm,
         )
