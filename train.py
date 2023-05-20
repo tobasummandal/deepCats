@@ -94,8 +94,8 @@ def create_nested_dataset(directory, size=224, channel_first=False, batch_size=3
         tf.data.Dataset.from_generator(
             lambda: zip(imgPaths, labels),
             output_signature=(
-                tf.TensorSpec(shape=(), dtype=tf.string), # type: ignore
-                tf.TensorSpec(shape=(), dtype=tf.int32), # type: ignore
+                tf.TensorSpec(shape=(), dtype=tf.string),  # type: ignore
+                tf.TensorSpec(shape=(), dtype=tf.int32),  # type: ignore
             ),
         )
         .shuffle(len(imgPaths))
@@ -323,6 +323,10 @@ def create_twohot_dataset(directory, size=224, channel_first=False, batch_size=3
         .map(_parse_image)
         .batch(batch_size)
         .prefetch(tf.data.AUTOTUNE)
+    )
+
+    print(
+        f"Found {len(imgPaths)} images belonging to {nClasses} classes with {nSub} subclasses on {np.sum(subCounts)}."
     )
 
     return ds, weights
