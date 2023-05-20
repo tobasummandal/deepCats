@@ -326,7 +326,7 @@ def create_twohot_dataset(directory, size=224, channel_first=False, batch_size=3
     )
 
     print(
-        f"Found {len(imgPaths)} images belonging to {nClasses} classes with {nSub} subclasses on {np.sum(subCounts)}."
+        f"Found {len(imgPaths)} images belonging to {nClasses} classes with {nSub} subclasses in {int(np.sum(subCounts))} images."
     )
 
     return ds, weights
