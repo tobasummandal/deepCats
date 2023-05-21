@@ -720,12 +720,13 @@ if __name__ == "__main__":
 
         # Make callbacks
         checkpoint = tf.keras.callbacks.ModelCheckpoint(
-            f"./models/deepCats/AlexNet/seed{seed:02}/epoch{{epoch:02d}}-val_loss{{val_loss:.2f}}.hdf5",
+            f"./models/deepCats/AlexNet/ecoCUBAmnesia/seed{seed:02}/epoch{{epoch:02d}}-val_loss{{val_loss:.2f}}.hdf5",
             monitor="val_loss",
             save_freq="epoch",
         )
         csvLogger = tf.keras.callbacks.CSVLogger(
-            f"./models/deepCats/AlexNet/seed{seed:02}/training.csv", append=True
+            f"./models/deepCats/AlexNet/ecoCUBAmnesia/seed{seed:02}/training.csv",
+            append=True,
         )
 
         def exp_schedule(epoch):
@@ -765,11 +766,29 @@ if __name__ == "__main__":
             batch_size=32,
         )
 
+        # Make callbacks
+        checkpoint = tf.keras.callbacks.ModelCheckpoint(
+            f"./models/deepCats/AlexNet/twoHot/seed{seed:02}/epoch{{epoch:02d}}-val_loss{{val_loss:.2f}}.hdf5",
+            monitor="val_loss",
+            save_freq="epoch",
+        )
+        csvLogger = tf.keras.callbacks.CSVLogger(
+            f"./models/deepCats/AlexNet/twoHot/seed{seed:02}/training.csv", append=True
+        )
+
+        def exp_schedule(epoch):
+            lr = 0.001
+            return lr * tf.math.pow(0.5, epoch)
+
+        schedule = tf.keras.callbacks.LearningRateScheduler(exp_schedule, verbose=1)
+        callbacks = [checkpoint, csvLogger, schedule]
+
         fit = train_twohot_model(
             model=model,
             trainDs=trainDs,
             valDs=valDs,
-            lr=0.0001,
+            lr=0.001,
             class_weights=weights,
             batch_norm=args.batchNorm,
+            callbacks=callbacks,
         )
