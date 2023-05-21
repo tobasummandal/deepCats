@@ -573,7 +573,7 @@ def train_twohot_model(
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=lr, epsilon=0.1),
         loss=loss,
-        metrics=["accuracy", "top_k_categorical_accuracy"],
+        metrics=["accuracy", "top_k_categorical_accuracy", BirdAccuracy()],
     )
     model.summary()
 
@@ -590,6 +590,36 @@ def train_twohot_model(
     )
 
     return fit
+
+
+class BirdAccuracy(tf.keras.metrics.Metric):
+    def __init__(self, name="bird_accuracy", **kwargs):
+        super(BirdAccuracy, self).__init__(name=name, **kwargs)
+        self.total = self.add_weight(name="total", initializer="zeros")
+        self.count = self.add_weight(name="count", initializer="zeros")
+
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        # Find the samples with two-hot
+        trueSums = tf.reduce_sum(y_true, axis=1)
+        birdIndices = tf.where(tf.equal(trueSums, 2))
+        birdIndices = tf.squeeze(birdIndices)
+
+        # Get the true and predicted labels for those samples
+        y_true = tf.gather(y_true, birdIndices)
+        y_pred = tf.gather(y_pred, birdIndices)
+
+        # Only keep the last 200 classes
+        y_true = y_true[-200:]
+        y_pred = y_pred[-200:]
+
+        y_pred = tf.argmax(y_pred, axis=-1)
+        y_true = tf.argmax(y_true, axis=-1)
+        correct = tf.cast(tf.equal(y_true, y_pred), tf.float32)
+        self.total.assign_add(tf.reduce_sum(correct))
+        self.count.assign_add(tf.cast(tf.size(correct), tf.float32))
+
+    def result(self):
+        return self.total / self.count
 
 
 if __name__ == "__main__":
