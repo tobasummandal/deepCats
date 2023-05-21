@@ -496,7 +496,12 @@ def train_ecocub_model(
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=lr, epsilon=0.1),
         loss=tf.keras.losses.CategoricalCrossentropy(),
-        metrics=["accuracy", "top_k_categorical_accuracy", BirdAccuracy(k=1, name="bird_top1"), BirdAccuracy(k=5, name="bird_top5"],
+        metrics=[
+            "accuracy",
+            "top_k_categorical_accuracy",
+            BirdAccuracy(k=1, name="bird_top1"),
+            BirdAccuracy(k=5, name="bird_top5"),
+        ],
     )
 
     model.summary()
