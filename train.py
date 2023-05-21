@@ -496,7 +496,7 @@ def train_ecocub_model(
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=lr, epsilon=0.1),
         loss=tf.keras.losses.CategoricalCrossentropy(),
-        metrics=["accuracy", "top_k_categorical_accuracy"],
+        metrics=["accuracy", "top_k_categorical_accuracy", BirdAccuracy(k=1, name="bird_top1"), BirdAccuracy(k=5, name="bird_top5"],
     )
 
     model.summary()
@@ -707,7 +707,7 @@ if __name__ == "__main__":
             os.path.join(dataDir, "ecoCUB", "train"), size=size
         )
         valDs, _ = create_flat_dataset(
-            os.path.join(dataDir, "ecoCUB", "val"), size=size, filter="CUB"
+            os.path.join(dataDir, "ecoCUB", "val"), size=size
         )
 
         weightPath = f"./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_{seed:02}/model.ckpt_epoch89"
