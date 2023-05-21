@@ -573,7 +573,12 @@ def train_twohot_model(
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=lr, epsilon=0.1),
         loss=loss,
-        metrics=["accuracy", "top_k_categorical_accuracy", BirdAccuracy()],
+        metrics=[
+            "accuracy",
+            "top_k_categorical_accuracy",
+            BirdAccuracy(top_k=1, name="bird_top1"),
+            BirdAccuracy(top_k=5, name="bird_top5"),
+        ],
     )
     model.summary()
 
@@ -593,33 +598,50 @@ def train_twohot_model(
 
 
 class BirdAccuracy(tf.keras.metrics.Metric):
-    def __init__(self, name="bird_accuracy", **kwargs):
+    def __init__(self, top_k=1, name="bird_accuracy", **kwargs):
         super(BirdAccuracy, self).__init__(name=name, **kwargs)
-        self.total = self.add_weight(name="total", initializer="zeros")
+        self.top_k = top_k
+        self.correct = self.add_weight(name="correct", initializer="zeros")
         self.count = self.add_weight(name="count", initializer="zeros")
 
+    @tf.function
     def update_state(self, y_true, y_pred, sample_weight=None):
         # Find the samples with two-hot
         trueSums = tf.reduce_sum(y_true, axis=1)
         birdIndices = tf.where(tf.equal(trueSums, 2))
         birdIndices = tf.squeeze(birdIndices)
 
-        # Get the true and predicted labels for those samples
-        y_true = tf.gather(y_true, birdIndices)
-        y_pred = tf.gather(y_pred, birdIndices)
+        if tf.size(birdIndices) != 0:
+            # Get the true and predicted labels for those samples
+            y_true = tf.gather(y_true, birdIndices)
+            y_pred = tf.gather(y_pred, birdIndices)
 
-        # Only keep the last 200 classes
-        y_true = y_true[-200:]
-        y_pred = y_pred[-200:]
+            # Reshape to ensure a batch dimensions
+            y_true = tf.reshape(y_true, (-1, 765))
+            y_pred = tf.reshape(y_pred, (-1, 765))
 
-        y_pred = tf.argmax(y_pred, axis=-1)
-        y_true = tf.argmax(y_true, axis=-1)
-        correct = tf.cast(tf.equal(y_true, y_pred), tf.float32)
-        self.total.assign_add(tf.reduce_sum(correct))
-        self.count.assign_add(tf.cast(tf.size(correct), tf.float32))
+            # Only keep the last 200 classes
+            y_true = y_true[:, -200:]
+            y_pred = y_pred[:, -200:]
 
+            # Get labels
+            y_true = tf.argmax(y_true, axis=-1, output_type=tf.int32)
+            y_pred = tf.math.top_k(y_pred, k=self.top_k, sorted=True).indices
+            y_pred = tf.transpose(y_pred)
+
+            # Calculate accuracy
+            correct = tf.cast(tf.equal(y_pred, y_true), tf.float32)
+            self.correct.assign_add(tf.reduce_sum(correct))
+
+            self.count.assign_add(tf.cast(tf.size(birdIndices), tf.float32))
+
+    @tf.function
     def result(self):
-        return self.total / self.count
+        return (
+            self.correct / self.count
+            if self.count != 0
+            else tf.constant(0, dtype=tf.float32)
+        )
 
 
 if __name__ == "__main__":
@@ -658,10 +680,19 @@ if __name__ == "__main__":
         help="directory containing the training data",
         default="./images/",
     )
+    parser.add_argument(
+        "--debug",
+        help="whether to use debug mode",
+        default=False,
+        action="store_true",
+    )
 
     args = parser.parse_args()
 
     seed = args.seed
+    tf.random.set_seed(seed)
+
+    tf.config.run_functions_eagerly(args.debug)
 
     if args.script == "ecoCubAmnesia":
         augment = args.augment
@@ -669,7 +700,6 @@ if __name__ == "__main__":
         dataDir = args.dataDir
 
         # Training seed
-        tf.random.set_seed(seed)
         size = 256 if augment else 224
 
         # Create dataset
