@@ -503,8 +503,8 @@ def train_ecocub_model(
         metrics=[
             "accuracy",
             "top_k_categorical_accuracy",
-            OneHotBirdAccuracy(k=1, name="bird_top1"),
-            OneHotBirdAccuracy(k=5, name="bird_top5"),
+            OneHotBirdAccuracy(top_k=1, name="bird_top1"),
+            OneHotBirdAccuracy(top_k=5, name="bird_top5"),
         ],
     )
 
@@ -655,7 +655,8 @@ class TwoHotBirdAccuracy(tf.keras.metrics.Metric):
             if self.count != 0
             else tf.constant(0, dtype=tf.float32)
         )
-    
+
+
 class OneHotBirdAccuracy(tf.keras.metrics.Metric):
     def __init__(self, top_k=1, name="bird_accuracy", **kwargs):
         super(OneHotBirdAccuracy, self).__init__(name=name, **kwargs)
@@ -667,7 +668,7 @@ class OneHotBirdAccuracy(tf.keras.metrics.Metric):
     def update_state(self, y_true, y_pred, sample_weight=None):
         # Only keep the last 200 classes
         y_true = y_true[:, -200:]
-        y_pred = y_pred[:, -200:]       
+        y_pred = y_pred[:, -200:]
 
         # Find the samples that ar birds
         trueSums = tf.reduce_sum(y_true, axis=-1)
@@ -775,7 +776,7 @@ if __name__ == "__main__":
             os.path.join(dataDir, "ecoCUB", "train"), size=size
         )
         valDs, _ = create_flat_dataset(
-            os.path.join(dataDir, "ecoCUB", "val"), size=size, filter="CUB"
+            os.path.join(dataDir, "ecoCUB", "val"), size=size,
         )
 
         weightPath = f"./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_{seed:02}/model.ckpt_epoch89"
