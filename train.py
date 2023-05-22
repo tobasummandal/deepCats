@@ -420,6 +420,7 @@ def train_ecocub_model(
     callbacks=[],
     initial_train=False,
     batch_norm=False,
+    reuse_weights=True,
 ):
     """
     Take an AlexNet model and perform transfer learning on it to classify the
@@ -457,6 +458,8 @@ def train_ecocub_model(
         activation=None,
         name="birdFC",
         kernel_regularizer=tf.keras.regularizers.l2(0.0005),
+        kernel_initializer=weightInit,
+        bias_initializer=tf.keras.initializers.Zeros(),
     )(x)
     x = tf.keras.layers.GlobalAveragePooling2D()(x)
     x = tf.keras.layers.Flatten()(x)
@@ -465,8 +468,9 @@ def train_ecocub_model(
     # Create new model
     model = tf.keras.Model(inputs=model.input, outputs=[x])
 
-    # Change birdFC layer weights and bias
-    model.get_layer("birdFC").set_weights([newWeights, newBias])
+    if reuse_weights:
+        # Change birdFC layer weights and bias
+        model.get_layer("birdFC").set_weights([newWeights, newBias])
 
     # Turn class weights into dictionary
     class_weights = {i: class_weights[i] for i in range(len(class_weights))}
@@ -499,8 +503,8 @@ def train_ecocub_model(
         metrics=[
             "accuracy",
             "top_k_categorical_accuracy",
-            BirdAccuracy(k=1, name="bird_top1"),
-            BirdAccuracy(k=5, name="bird_top5"),
+            OneHotBirdAccuracy(k=1, name="bird_top1"),
+            OneHotBirdAccuracy(k=5, name="bird_top5"),
         ],
     )
 
@@ -527,6 +531,7 @@ def train_twohot_model(
     softmax=True,
     callbacks=[],
     batch_norm=False,
+    reuse_weights=True,
 ):
     origKernel, origBias = model.get_layer("fc8").get_weights()
     weightInit = tf.keras.initializers.TruncatedNormal(
@@ -556,7 +561,9 @@ def train_twohot_model(
         padding="same",
         activation=None,
         name="twoHotFC",
+        kernel_initializer=weightInit,
         kernel_regularizer=tf.keras.regularizers.l2(0.0005),
+        bias_initializer=tf.keras.initializers.Zeros(),
     )(x)
     x = tf.keras.layers.GlobalAveragePooling2D()(x)
     x = tf.keras.layers.Flatten()(x)
@@ -571,8 +578,9 @@ def train_twohot_model(
     # Create new model
     model = tf.keras.Model(inputs=model.input, outputs=[x])
 
-    # Plugin the old weights with new concatenated
-    model.get_layer("twoHotFC").set_weights([newWeights, newBias])
+    if reuse_weights:
+        # Plugin the old weights with new concatenated
+        model.get_layer("twoHotFC").set_weights([newWeights, newBias])
 
     # Compile
     model.compile(
@@ -581,8 +589,8 @@ def train_twohot_model(
         metrics=[
             "accuracy",
             "top_k_categorical_accuracy",
-            BirdAccuracy(top_k=1, name="bird_top1"),
-            BirdAccuracy(top_k=5, name="bird_top5"),
+            TwoHotBirdAccuracy(top_k=1, name="bird_top1"),
+            TwoHotBirdAccuracy(top_k=5, name="bird_top5"),
         ],
     )
     model.summary()
@@ -602,9 +610,9 @@ def train_twohot_model(
     return fit
 
 
-class BirdAccuracy(tf.keras.metrics.Metric):
+class TwoHotBirdAccuracy(tf.keras.metrics.Metric):
     def __init__(self, top_k=1, name="bird_accuracy", **kwargs):
-        super(BirdAccuracy, self).__init__(name=name, **kwargs)
+        super(TwoHotBirdAccuracy, self).__init__(name=name, **kwargs)
         self.top_k = top_k
         self.correct = self.add_weight(name="correct", initializer="zeros")
         self.count = self.add_weight(name="count", initializer="zeros")
@@ -628,6 +636,48 @@ class BirdAccuracy(tf.keras.metrics.Metric):
             # Only keep the last 200 classes
             y_true = y_true[:, -200:]
             y_pred = y_pred[:, -200:]
+
+            # Get labels
+            y_true = tf.argmax(y_true, axis=-1, output_type=tf.int32)
+            y_pred = tf.math.top_k(y_pred, k=self.top_k, sorted=True).indices
+            y_pred = tf.transpose(y_pred)
+
+            # Calculate accuracy
+            correct = tf.cast(tf.equal(y_pred, y_true), tf.float32)
+            self.correct.assign_add(tf.reduce_sum(correct))
+
+            self.count.assign_add(tf.cast(tf.size(birdIndices), tf.float32))
+
+    @tf.function
+    def result(self):
+        return (
+            self.correct / self.count
+            if self.count != 0
+            else tf.constant(0, dtype=tf.float32)
+        )
+    
+class OneHotBirdAccuracy(tf.keras.metrics.Metric):
+    def __init__(self, top_k=1, name="bird_accuracy", **kwargs):
+        super(OneHotBirdAccuracy, self).__init__(name=name, **kwargs)
+        self.top_k = top_k
+        self.correct = self.add_weight(name="correct", initializer="zeros")
+        self.count = self.add_weight(name="count", initializer="zeros")
+
+    @tf.function
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        # Only keep the last 200 classes
+        y_true = y_true[:, -200:]
+        y_pred = y_pred[:, -200:]       
+
+        # Find the samples that ar birds
+        trueSums = tf.reduce_sum(y_true, axis=-1)
+        birdIndices = tf.where(tf.equal(trueSums, 1))
+        birdIndices = tf.squeeze(birdIndices)
+
+        if tf.size(birdIndices) != 0:
+            # Get the true and predicted labels for those samples
+            y_true = tf.gather(y_true, birdIndices)
+            y_pred = tf.gather(y_pred, birdIndices)
 
             # Get labels
             y_true = tf.argmax(y_true, axis=-1, output_type=tf.int32)
@@ -686,6 +736,19 @@ if __name__ == "__main__":
         default="./images/",
     )
     parser.add_argument(
+        "--new_weights",
+        help="use new weights",
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
+        "--activation",
+        type=str,
+        help="activation function to use",
+        default="softmax",
+        choices=["softmax", "sigmoid"],
+    )
+    parser.add_argument(
         "--debug",
         help="whether to use debug mode",
         default=False,
@@ -712,7 +775,7 @@ if __name__ == "__main__":
             os.path.join(dataDir, "ecoCUB", "train"), size=size
         )
         valDs, _ = create_flat_dataset(
-            os.path.join(dataDir, "ecoCUB", "val"), size=size
+            os.path.join(dataDir, "ecoCUB", "val"), size=size, filter="CUB"
         )
 
         weightPath = f"./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_{seed:02}/model.ckpt_epoch89"
@@ -750,6 +813,7 @@ if __name__ == "__main__":
             lr=0.001,
             callbacks=callbacks,
             batch_norm=batchNorm,
+            reuse_weights=not args.new_weights,
         )
     elif args.script == "twoHot":
         weightPath = f"./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_{seed:02}/model.ckpt_epoch89"
@@ -796,4 +860,6 @@ if __name__ == "__main__":
             class_weights=weights,
             batch_norm=args.batchNorm,
             callbacks=callbacks,
+            softmax=args.activation == "softmax",
+            reuse_weights=not args.new_weights,
         )
