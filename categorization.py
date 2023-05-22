@@ -374,6 +374,72 @@ def get_evidence(rep, catRep, simFun, maxExemplars=None):
     return np.sum(np.apply_along_axis(lambda x: simFun(rep, x), 1, catRep))
 
 
+def simulate_cat_verification(
+    reps, imgInfo, categoryCol, modelName, simFun, criterion, maxImgs=None
+):
+    """
+    Return a dataframe simulating the results of a category verification task.
+    """
+    # Setup dataframe
+    performance = pd.DataFrame(
+        columns=["seed", "model", "image", "category", "level", "response", "RT"]
+    )
+
+    # Get number of models
+    nModels = len(reps)
+
+    # Get categories
+    categories = np.unique(imgInfo[categoryCol].dropna())
+
+    # Loop through categories
+    for category in categories:
+        # Get the representations of this category
+        catIdx = imgInfo[imgInfo[categoryCol] == category].index
+        # Loop through models
+        for i in range(nModels):
+            # Get reps for this model
+            catReps = reps[i, catIdx, :]
+            # Loop through images
+            for j in range(len(catReps)):
+                # Image rows
+                img = imgInfo.iloc[catIdx[j]]
+
+                # Representations
+                targetRep = catReps[j, :]
+                catRep = np.delete(catReps, j, 0)
+
+                if maxImgs is not None:
+                    catRep = catRep[np.random.choice(catRep.shape[0], maxImgs, False)]
+
+                # Simulate trial
+                evidence = get_evidence(targetRep, catRep, simFun)
+                drift = evidence / (evidence + criterion)
+                resp, rt = LBA_deterministic(drift, 1 - drift, b=0.5)
+                resp = "yes" if resp == 1 else "no"
+
+                # Add trial to performance df
+                performance = pd.concat(
+                    [
+                        performance,
+                        pd.DataFrame(
+                            {
+                                "seed": i + 1,
+                                "model": modelName,
+                                "image": img["name"],
+                                "category": category,
+                                "level": categoryCol,
+                                "response": resp,
+                                "RT": rt,
+                            },
+                            index=[0],
+                        ),
+                    ]
+                )
+
+    return performance
+
+
 if __name__ == "__main__":
     df = build_df_from_dir("./images/deepCats")
-    df
+    # Save df
+    df.to_csv("./deepCatsImages.csv", index=False)
