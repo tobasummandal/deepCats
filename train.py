@@ -532,21 +532,14 @@ def train_twohot_model(
     callbacks=[],
     batch_norm=False,
     reuse_weights=True,
+    old_fc8_trainable=True,
 ):
-    origKernel, origBias = model.get_layer("fc8").get_weights()
-    weightInit = tf.keras.initializers.TruncatedNormal(
-        stddev=0.005
-    )  # It might be better to sample from old weights
-    newWeights = weightInit(shape=(1, 1, 4096, 200))
-    newBias = tf.keras.initializers.zeros()(shape=(200,))
-
-    # Concatenate
-    newWeights = tf.concat([origKernel, newWeights], axis=3)
-    newBias = tf.concat([origBias, newBias], axis=0)
-
     # Freeze all layers
     for layer in model.layers:
         layer.trainable = False
+
+    # Get the output of the previous classification layer
+    basicOutput = model.layers[-3].output
 
     # Get model output at fc dropout layer
     x = model.layers[-4].output
@@ -555,16 +548,18 @@ def train_twohot_model(
     if batch_norm:
         x = tf.keras.layers.BatchNormalization()(x)
 
+    weightInit = tf.keras.initializers.TruncatedNormal(stddev=0.005)
     x = tf.keras.layers.Conv2D(
-        765,
+        200,
         (1, 1),
         padding="same",
         activation=None,
-        name="twoHotFC",
+        name="birdFC",
         kernel_initializer=weightInit,
         kernel_regularizer=tf.keras.regularizers.l2(0.0005),
         bias_initializer=tf.keras.initializers.Zeros(),
     )(x)
+    x = tf.keras.layers.Concatenate()([basicOutput, x])
     x = tf.keras.layers.GlobalAveragePooling2D()(x)
     x = tf.keras.layers.Flatten()(x)
 
@@ -578,9 +573,13 @@ def train_twohot_model(
     # Create new model
     model = tf.keras.Model(inputs=model.input, outputs=[x])
 
-    if reuse_weights:
-        # Plugin the old weights with new concatenated
-        model.get_layer("twoHotFC").set_weights([newWeights, newBias])
+    # Reinitialize fc8 weights if needed
+    if not reuse_weights:
+        oldWeights, oldBias = model.get_layer("fc8").get_weights()
+        newWeights = weightInit(tf.shape(oldWeights))
+        newBias = tf.keras.initializers.Zeros(oldBias)
+        model.get_layer("fc8").set_weights([newWeights, newBias])
+    model.get_layer("fc8").trainable = old_fc8_trainable
 
     # Compile
     model.compile(
@@ -776,7 +775,8 @@ if __name__ == "__main__":
             os.path.join(dataDir, "ecoCUB", "train"), size=size
         )
         valDs, _ = create_flat_dataset(
-            os.path.join(dataDir, "ecoCUB", "val"), size=size,
+            os.path.join(dataDir, "ecoCUB", "val"),
+            size=size,
         )
 
         weightPath = f"./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_{seed:02}/model.ckpt_epoch89"
@@ -847,8 +847,9 @@ if __name__ == "__main__":
         )
 
         def exp_schedule(epoch):
-            lr = 0.001
-            return lr * tf.math.pow(0.5, epoch)
+            lr = 0.01
+            # return lr * tf.math.pow(0.5, epoch)
+            return lr
 
         schedule = tf.keras.callbacks.LearningRateScheduler(exp_schedule, verbose=1)
         callbacks = [checkpoint, csvLogger, schedule]
@@ -857,10 +858,11 @@ if __name__ == "__main__":
             model=model,
             trainDs=trainDs,
             valDs=valDs,
-            lr=0.001,
+            lr=0.01,
             class_weights=weights,
             batch_norm=args.batchNorm,
             callbacks=callbacks,
             softmax=args.activation == "softmax",
             reuse_weights=not args.new_weights,
+            old_fc8_trainable=True,
         )
