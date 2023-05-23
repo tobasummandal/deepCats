@@ -718,6 +718,18 @@ if __name__ == "__main__":
         required=True,
     )
     parser.add_argument(
+        "--learningRate",
+        type=float,
+        help="initial learning rate to use for training",
+        default=0.001,
+    )
+    parser.add_argument(
+        "--lrDecay",
+        type=float,
+        help="learning rate decay factor",
+        default=1,
+    )
+    parser.add_argument(
         "--augment",
         type=bool,
         help="whether to use data augmentation",
@@ -799,8 +811,8 @@ if __name__ == "__main__":
         )
 
         def exp_schedule(epoch):
-            lr = 0.001
-            return lr * tf.math.pow(0.5, epoch)
+            lr = args.learningRate
+            return lr * tf.math.pow(args.lrDecay, epoch)
 
         schedule = tf.keras.callbacks.LearningRateScheduler(exp_schedule, verbose=1)
         callbacks = [checkpoint, csvLogger, schedule]
@@ -811,7 +823,7 @@ if __name__ == "__main__":
             trainDs=trainDs,
             valDs=valDs,
             class_weights=weights,
-            lr=0.001,
+            lr=args.learningRate,
             callbacks=callbacks,
             batch_norm=batchNorm,
             reuse_weights=not args.new_weights,
@@ -847,9 +859,8 @@ if __name__ == "__main__":
         )
 
         def exp_schedule(epoch):
-            lr = 0.01
-            # return lr * tf.math.pow(0.5, epoch)
-            return lr
+            lr = args.learningRate
+            return lr * tf.math.pow(args.lrDecay, epoch)
 
         schedule = tf.keras.callbacks.LearningRateScheduler(exp_schedule, verbose=1)
         callbacks = [checkpoint, csvLogger, schedule]
@@ -858,7 +869,7 @@ if __name__ == "__main__":
             model=model,
             trainDs=trainDs,
             valDs=valDs,
-            lr=0.01,
+            lr=args.learningRate,
             class_weights=weights,
             batch_norm=args.batchNorm,
             callbacks=callbacks,
