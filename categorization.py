@@ -375,7 +375,15 @@ def get_evidence(rep, catRep, simFun, maxExemplars=None):
 
 
 def simulate_cat_verification(
-    reps, imgInfo, categoryCol, modelName, simFun, criterion, maxImgs=None
+    testReps,
+    memoryReps,
+    testImgInfo,
+    memoryImgInfo,
+    categoryCol,
+    modelName,
+    simFun,
+    criterion,
+    maxImgs=None,
 ):
     """
     Return a dataframe simulating the results of a category verification task.
@@ -386,33 +394,35 @@ def simulate_cat_verification(
     )
 
     # Get number of models
-    nModels = len(reps)
+    nModels = len(testReps)
 
     # Get categories
-    categories = np.unique(imgInfo[categoryCol].dropna())
+    categories = np.unique(testImgInfo[categoryCol].dropna())
 
     # Loop through categories
     for category in categories:
         # Get the representations of this category
-        catIdx = imgInfo[imgInfo[categoryCol] == category].index
+        catIdx = testImgInfo[testImgInfo[categoryCol] == category].index
         # Loop through models
         for i in range(nModels):
             # Get reps for this model
-            catReps = reps[i, catIdx, :]
-            # Loop through images
-            for j in range(len(catReps)):
-                # Image rows
-                img = imgInfo.iloc[catIdx[j]]
+            memoryModelReps = memoryReps[i, catIdx, :]
+            testModelReps = testReps[i, catIdx, :]
 
-                # Representations
-                targetRep = catReps[j, :]
-                catRep = np.delete(catReps, j, 0)
+            # Loop through images
+            for j, imgRep in enumerate(testModelReps):
+                # Image rows
+                imgInfo = testImgInfo.iloc[catIdx[j]]
 
                 if maxImgs is not None:
-                    catRep = catRep[np.random.choice(catRep.shape[0], maxImgs, False)]
+                    catReps = memoryModelReps[
+                        np.random.choice(memoryModelReps.shape[0], maxImgs, False)
+                    ]
+                else:
+                    catReps = memoryModelReps[:]
 
                 # Simulate trial
-                evidence = get_evidence(targetRep, catRep, simFun)
+                evidence = get_evidence(imgRep, catReps, simFun)
                 drift = evidence / (evidence + criterion)
                 resp, rt = LBA_deterministic(drift, 1 - drift, b=0.5)
                 resp = "yes" if resp == 1 else "no"
@@ -425,7 +435,7 @@ def simulate_cat_verification(
                             {
                                 "seed": i + 1,
                                 "model": modelName,
-                                "image": img["name"],
+                                "image": imgInfo["name"],
                                 "category": category,
                                 "level": categoryCol,
                                 "response": resp,
@@ -440,6 +450,6 @@ def simulate_cat_verification(
 
 
 if __name__ == "__main__":
-    df = build_df_from_dir("./images/deepCats")
+    df = build_df_from_dir("./images/deepCats/test")
     # Save df
-    df.to_csv("./deepCatsImages.csv", index=False)
+    df.to_csv("./deepCatsTestImages.csv", index=False)
