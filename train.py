@@ -754,6 +754,12 @@ if __name__ == "__main__":
         action="store_true",
     )
     parser.add_argument(
+        "--freeze_basic",
+        help="freeze basic level classification nodes",
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
         "--activation",
         type=str,
         help="activation function to use",
@@ -875,5 +881,5 @@ if __name__ == "__main__":
             callbacks=callbacks,
             softmax=args.activation == "softmax",
             reuse_weights=not args.new_weights,
-            old_fc8_trainable=True,
+            old_fc8_trainable=not args.freeze_basic,
         )
