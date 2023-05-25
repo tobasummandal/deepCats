@@ -417,6 +417,7 @@ def train_ecocub_model(
     valDs,
     class_weights,
     lr,
+    epochs,
     callbacks=[],
     initial_train=False,
     batch_norm=False,
@@ -513,7 +514,7 @@ def train_ecocub_model(
     # Train model
     fit = model.fit(
         trainDs,
-        epochs=10,
+        epochs=epochs,
         validation_data=valDs,
         class_weight=class_weights,
         callbacks=callbacks,
@@ -528,6 +529,7 @@ def train_twohot_model(
     valDs,
     class_weights,
     lr,
+    epochs,
     softmax=True,
     callbacks=[],
     batch_norm=False,
@@ -537,6 +539,7 @@ def train_twohot_model(
     # Freeze all layers
     for layer in model.layers:
         layer.trainable = False
+    model.get_layer("fc7").trainable = True
 
     # Get the output of the previous classification layer
     basicOutput = model.layers[-3].output
@@ -575,9 +578,11 @@ def train_twohot_model(
 
     # Reinitialize fc8 weights if needed
     if not reuse_weights:
+        # Remake initializer for weights to avoid identical values
+        weightInit = tf.keras.initializers.TruncatedNormal(stddev=0.005)
         oldWeights, oldBias = model.get_layer("fc8").get_weights()
         newWeights = weightInit(tf.shape(oldWeights))
-        newBias = tf.keras.initializers.Zeros(oldBias)
+        newBias = tf.keras.initializers.Zeros()(tf.shape(oldBias))
         model.get_layer("fc8").set_weights([newWeights, newBias])
     model.get_layer("fc8").trainable = old_fc8_trainable
 
@@ -600,7 +605,7 @@ def train_twohot_model(
     # Train model
     fit = model.fit(
         trainDs,
-        epochs=10,
+        epochs=epochs,
         validation_data=valDs,
         callbacks=callbacks,
         class_weight=class_weights,
@@ -715,7 +720,6 @@ if __name__ == "__main__":
         "--seed",
         type=int,
         help="seed to use for training",
-        required=True,
     )
     parser.add_argument(
         "--learningRate",
@@ -728,6 +732,12 @@ if __name__ == "__main__":
         type=float,
         help="learning rate decay factor",
         default=1,
+    )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        help="number of epochs to train for",
+        default=10,
     )
     parser.add_argument(
         "--augment",
@@ -767,6 +777,12 @@ if __name__ == "__main__":
         choices=["softmax", "sigmoid"],
     )
     parser.add_argument(
+        "--gpu_id",
+        type=str,
+        help="which gpu to use",
+        default=None,
+    )
+    parser.add_argument(
         "--debug",
         help="whether to use debug mode",
         default=False,
@@ -774,6 +790,10 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+
+    # If a gpu id is given, use that gpu
+    if args.gpu_id is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
 
     seed = args.seed
     tf.random.set_seed(seed)
@@ -830,6 +850,7 @@ if __name__ == "__main__":
             valDs=valDs,
             class_weights=weights,
             lr=args.learningRate,
+            epochs=args.epochs,
             callbacks=callbacks,
             batch_norm=batchNorm,
             reuse_weights=not args.new_weights,
@@ -860,9 +881,19 @@ if __name__ == "__main__":
             monitor="val_loss",
             save_freq="epoch",
         )
-        csvLogger = tf.keras.callbacks.CSVLogger(
-            f"./models/deepCats/AlexNet/twoHot/seed{seed:02}/training.csv", append=True
+
+        hyperParams = (
+            f"{args.activation}"
+            f"-lr{args.learningRate}"
+            f"-decay{args.lrDecay}"
+            f"{'-freeze_basic' if args.freeze_basic else ''}"
+            f"{'-new_weights' if args.new_weights else ''}"
         )
+        loggingFile = (
+            f"./models/deepCats/AlexNet/twoHot/seed{seed:02}/training-{hyperParams}.csv"
+        )
+        print("Logging to ", loggingFile)
+        csvLogger = tf.keras.callbacks.CSVLogger(loggingFile, append=True)
 
         def exp_schedule(epoch):
             lr = args.learningRate
@@ -876,10 +907,76 @@ if __name__ == "__main__":
             trainDs=trainDs,
             valDs=valDs,
             lr=args.learningRate,
+            epochs=args.epochs,
             class_weights=weights,
             batch_norm=args.batchNorm,
             callbacks=callbacks,
             softmax=args.activation == "softmax",
             reuse_weights=not args.new_weights,
             old_fc8_trainable=not args.freeze_basic,
+        )
+    else:  # Main script
+        os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+        trainDs, weights = create_twohot_dataset(
+            os.path.join("./images/ecoset_nestedCUB", "train"),
+            size=224,
+            channel_first=False,
+            batch_size=32,
+        )
+        valDs, _ = create_twohot_dataset(
+            os.path.join("./images/ecoset_nestedCUB", "val"),
+            size=224,
+            channel_first=False,
+            batch_size=32,
+        )
+
+        model = tf.keras.models.load_model(
+            "./models/deepCats/AlexNet/twoHot/seed01/epoch10-softmax-lr-0.01-decay0.5hdf5",
+            custom_objects={"TwoHotBirdAccuracy": TwoHotBirdAccuracy},
+        )
+
+        model.summary()
+
+        class_weights = {i: weights[i] for i in range(len(weights))}
+
+        # Make callbacks
+        checkpoint = tf.keras.callbacks.ModelCheckpoint(
+            f"./models/deepCats/AlexNet/twoHot/seed01/epoch{{epoch:02d}}-val_loss{{val_loss:.2f}}.hdf5",
+            monitor="val_loss",
+            save_freq="epoch",
+        )
+
+        hyperParams = (
+            f"{args.activation}"
+            f"-lr{args.learningRate}"
+            f"-decay{args.lrDecay}"
+            f"{'-freeze_basic' if args.freeze_basic else ''}"
+            f"{'-new_weights' if args.new_weights else ''}"
+        )
+        loggingFile = (
+            f"./models/deepCats/AlexNet/twoHot/seed01/training-{hyperParams}.csv"
+        )
+        print("Logging to ", loggingFile)
+        csvLogger = tf.keras.callbacks.CSVLogger(
+            loggingFile,
+            append=True,
+        )
+
+        def exp_schedule(epoch):
+            lr = tf.constant(args.learningRate, dtype=tf.float32)
+            epoch = tf.constant(epoch, dtype=tf.float32)
+            lrDecay = tf.constant(args.lrDecay, dtype=tf.float32)
+            return lr * tf.math.pow(lrDecay, epoch)
+
+        schedule = tf.keras.callbacks.LearningRateScheduler(exp_schedule, verbose=1)
+        callbacks = [checkpoint, csvLogger, schedule]
+
+        # Train model
+        fit = model.fit(
+            trainDs,
+            epochs=20,
+            initial_epoch=10,
+            validation_data=valDs,
+            callbacks=callbacks,
+            class_weight=class_weights,
         )
