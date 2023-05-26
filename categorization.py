@@ -3,6 +3,7 @@ import PIL.Image as Image
 import numpy as np
 import tensorflow as tf
 import pandas as pd
+from itertools import combinations
 
 
 # List folders
@@ -447,6 +448,29 @@ def simulate_cat_verification(
                 )
 
     return performance
+
+
+def cluster_index(imgInfo, levelCol, category, imgSet, simMat):
+    loc = (imgInfo[levelCol] == category) & (imgInfo["set"] == imgSet)
+    withinIdxs = imgInfo.loc[loc, "name"].index
+
+    loc = (imgInfo[levelCol] != category) & (imgInfo["set"] == imgSet)
+    betweenIdxs = imgInfo.loc[loc, "name"].index
+
+    withinSum = 0
+    withinCount = 0
+    for i, j in combinations(withinIdxs, 2):
+        withinSum += simMat[i, j]
+        withinCount += 1
+
+    betweenSum = 0
+    betweenCount = 0
+    for i in withinIdxs:
+        for j in betweenIdxs:
+            betweenSum += simMat[i, j]
+            betweenCount += 1
+
+    return (betweenSum / betweenCount) - (withinSum / withinCount)
 
 
 if __name__ == "__main__":
