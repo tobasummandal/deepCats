@@ -470,7 +470,7 @@ def cluster_index(imgInfo, levelCol, category, imgSet, simMat):
             betweenSum += simMat[i, j]
             betweenCount += 1
 
-    return (betweenSum / betweenCount) - (withinSum / withinCount)
+    return (withinSum / withinCount) - (betweenSum / betweenCount)
 
 
 if __name__ == "__main__":
