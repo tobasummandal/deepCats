@@ -200,7 +200,9 @@ def create_flat_dataset(
     return ds, weights
 
 
-def create_twohot_dataset(directory, size=224, channel_first=False, batch_size=32):
+def create_twohot_dataset(
+    directory, size=224, channel_first=False, batch_size=32, softmax_labels=False
+):
     """
     Return a dataset given a nested directory structure. If the directory
     contains images, those images will be assigned to that class as one-hot. If
@@ -314,6 +316,8 @@ def create_twohot_dataset(directory, size=224, channel_first=False, batch_size=3
         if len(y) > 1:
             label2 = tf.one_hot(y[1], len(counts))
             label = tf.add(label, label2)
+            if softmax_labels:
+                label = label / 2.0
 
         return x, label
 
@@ -530,6 +534,7 @@ def train_twohot_model(
     class_weights,
     lr,
     epochs,
+    thaw_layers=["fc7"],
     softmax=True,
     callbacks=[],
     batch_norm=False,
@@ -539,7 +544,9 @@ def train_twohot_model(
     # Freeze all layers
     for layer in model.layers:
         layer.trainable = False
-    model.get_layer("fc7").trainable = True
+
+    for layer in thaw_layers:
+        model.get_layer(layer).trainable = True
 
     # Get the output of the previous classification layer
     basicOutput = model.layers[-3].output
@@ -549,6 +556,7 @@ def train_twohot_model(
 
     # Add new classification layer
     if batch_norm:
+        
         x = tf.keras.layers.BatchNormalization()(x)
 
     weightInit = tf.keras.initializers.TruncatedNormal(stddev=0.005)
@@ -625,7 +633,7 @@ class TwoHotBirdAccuracy(tf.keras.metrics.Metric):
     def update_state(self, y_true, y_pred, sample_weight=None):
         # Find the samples with two-hot
         trueSums = tf.reduce_sum(y_true, axis=1)
-        birdIndices = tf.where(tf.equal(trueSums, 2))
+        birdIndices = tf.where(tf.greater(trueSums, 0))
         birdIndices = tf.squeeze(birdIndices)
 
         if tf.size(birdIndices) != 0:
@@ -758,6 +766,13 @@ if __name__ == "__main__":
         default="./images/",
     )
     parser.add_argument(
+        "--thaw_layers",
+        type=str,
+        nargs="+",
+        help="layers to thaw",
+        default=["fc7"],
+    )
+    parser.add_argument(
         "--new_weights",
         help="use new weights",
         default=False,
@@ -766,6 +781,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--freeze_basic",
         help="freeze basic level classification nodes",
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
+        "--softmax_labels",
+        help="use softmax labels for multiple labels",
         default=False,
         action="store_true",
     )
@@ -831,8 +852,16 @@ if __name__ == "__main__":
             monitor="val_loss",
             save_freq="epoch",
         )
+
+        hyperParams = (
+            f"-lr{args.learningRate}"
+            f"-decay{args.lrDecay}"
+            f"{'-new_weights' if args.new_weights else ''}"
+        )
+        loggingFile = f"./models/deepCats/AlexNet/ecoCUBAmnesia/seed{seed:02}/training{hyperParams}.csv"
+        print("Logging to ", loggingFile)
         csvLogger = tf.keras.callbacks.CSVLogger(
-            f"./models/deepCats/AlexNet/ecoCUBAmnesia/seed{seed:02}/training.csv",
+            loggingFile,
             append=True,
         )
 
@@ -867,12 +896,14 @@ if __name__ == "__main__":
             size=224,
             channel_first=False,
             batch_size=32,
+            softmax_labels=args.softmax_labels,
         )
         valDs, _ = create_twohot_dataset(
             os.path.join(args.dataDir, "val"),
             size=224,
             channel_first=False,
             batch_size=32,
+            softmax_labels=args.softmax_labels,
         )
 
         # Make callbacks
@@ -888,6 +919,8 @@ if __name__ == "__main__":
             f"-decay{args.lrDecay}"
             f"{'-freeze_basic' if args.freeze_basic else ''}"
             f"{'-new_weights' if args.new_weights else ''}"
+            f"{'-softmax_labels' if args.softmax_labels else ''}"
+            f"{'-batchNorm' if args.batchNorm else ''}"
         )
         loggingFile = (
             f"./models/deepCats/AlexNet/twoHot/seed{seed:02}/training-{hyperParams}.csv"
@@ -911,6 +944,7 @@ if __name__ == "__main__":
             class_weights=weights,
             batch_norm=args.batchNorm,
             callbacks=callbacks,
+            thaw_layers=args.thaw_layers,
             softmax=args.activation == "softmax",
             reuse_weights=not args.new_weights,
             old_fc8_trainable=not args.freeze_basic,
