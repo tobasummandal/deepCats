@@ -630,23 +630,23 @@ class TwoHotBirdAccuracy(tf.keras.metrics.Metric):
 
     @tf.function
     def update_state(self, y_true, y_pred, sample_weight=None):
+        # Reshape to ensure a batch dimensions
+        y_true = tf.reshape(y_true, (-1, 765))
+        y_pred = tf.reshape(y_pred, (-1, 765))
+
+        # Only keep the last 200 classes
+        y_true = y_true[:, -200:]
+        y_pred = y_pred[:, -200:]
+
         # Find the samples with two-hot
         trueSums = tf.reduce_sum(y_true, axis=1)
-        birdIndices = tf.where(tf.greater(trueSums, 1))
+        birdIndices = tf.where(tf.greater(trueSums, 0))
         birdIndices = tf.squeeze(birdIndices)
 
         if tf.size(birdIndices) != 0:
             # Get the true and predicted labels for those samples
             y_true = tf.gather(y_true, birdIndices)
             y_pred = tf.gather(y_pred, birdIndices)
-
-            # Reshape to ensure a batch dimensions
-            y_true = tf.reshape(y_true, (-1, 765))
-            y_pred = tf.reshape(y_pred, (-1, 765))
-
-            # Only keep the last 200 classes
-            y_true = y_true[:, -200:]
-            y_pred = y_pred[:, -200:]
 
             # Get labels
             y_true = tf.argmax(y_true, axis=-1, output_type=tf.int32)
