@@ -632,7 +632,7 @@ class TwoHotBirdAccuracy(tf.keras.metrics.Metric):
     def update_state(self, y_true, y_pred, sample_weight=None):
         # Find the samples with two-hot
         trueSums = tf.reduce_sum(y_true, axis=1)
-        birdIndices = tf.where(tf.greater(trueSums, 0))
+        birdIndices = tf.where(tf.greater(trueSums, 1))
         birdIndices = tf.squeeze(birdIndices)
 
         if tf.size(birdIndices) != 0:
@@ -953,7 +953,7 @@ if __name__ == "__main__":
                 old_fc8_trainable=not args.freeze_basic,
             )
     else:  # Main script
-        os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+        os.environ["CUDA_VISIBLE_DEVICES"] = "1"
         trainDs, weights = create_twohot_dataset(
             os.path.join("./images/ecoset_nestedCUB", "train"),
             size=224,
