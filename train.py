@@ -324,7 +324,7 @@ def create_twohot_dataset(
     ds = (
         tf.data.Dataset.from_tensor_slices((imgPaths, labels))
         .shuffle(len(imgPaths))
-        .map(_parse_image)
+        .map(_parse_image, num_parallel_calls=tf.data.AUTOTUNE)
         .batch(batch_size)
         .prefetch(tf.data.AUTOTUNE)
     )
@@ -819,7 +819,8 @@ if __name__ == "__main__":
         strategy = tf.distribute.MirroredStrategy()
 
     seed = args.seed
-    tf.random.set_seed(seed)
+    tf.keras.utils.set_random_seed(seed)
+    tf.config.experimental.enable_op_determinism()
 
     tf.config.run_functions_eagerly(args.debug)
 
