@@ -3,6 +3,8 @@ import tensorflow as tf
 from tensorflow.keras import layers
 import os
 import shutil
+import glob
+import numpy as np
 
 
 def make_output_model(model, average_pooling=True, flatten=True):
@@ -142,5 +144,44 @@ def split_CUB200_data(source_dir, target_dir):
     return None
 
 
+def get_reps_over_training(modelDir, layer, images):
+    """
+    Return representation from layer of the images over training from modelDir.
+    We expect modelDir to have saved models over epochs.
+    """
+    # Get model files
+    modelFiles = glob.glob(os.path.join(modelDir, "*.hdf5"))
+    modelFiles.sort()
+
+    # Preallocate shape of representations
+    reps = np.zeros((len(modelFiles), images.shape[0], (5 * 5 * 4096)))
+
+    # Loop through models
+    for i, modelFile in enumerate(modelFiles):
+        # Cleanup so we don't run out of GPU memory
+        tf.keras.backend.clear_session()
+
+        # Load model
+        model = tf.keras.models.load_model(modelFile)
+
+        # Get output at target layer
+        x = model.get_layer(layer).output
+
+        # Add flatten layer
+        x = tf.keras.layers.Flatten()(x)
+
+        # Compile model
+        model = tf.keras.models.Model(inputs=model.input, outputs=x)
+
+        # Get representations
+        reps[i] = model.predict(images)
+
+    return reps
+
+
 if __name__ == "__main__":
-    split_CUB200_data("./images/CUB_200_2011", "./images/CUB200Split")
+    # Load images
+    images = np.load("./images/deepCatsTrainImages.npy")
+    get_reps_over_training(
+        modelDir="./models/deepCats/AlexNet/seed01", layer="fc7", images=images
+    )
