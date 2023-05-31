@@ -534,19 +534,15 @@ def train_twohot_model(
     class_weights,
     lr,
     epochs,
-    thaw_layers=["fc7"],
+    thaw_layers=["fc7", "fc8", "birdFC"],
     softmax=True,
     callbacks=[],
     batch_norm=False,
     reuse_weights=True,
-    old_fc8_trainable=True,
 ):
     # Freeze all layers
     for layer in model.layers:
         layer.trainable = False
-
-    for layer in thaw_layers:
-        model.get_layer(layer).trainable = True
 
     # Get the output of the previous classification layer
     basicOutput = model.layers[-3].output
@@ -591,7 +587,9 @@ def train_twohot_model(
         newWeights = weightInit(tf.shape(oldWeights))
         newBias = tf.keras.initializers.Zeros()(tf.shape(oldBias))
         model.get_layer("fc8").set_weights([newWeights, newBias])
-    model.get_layer("fc8").trainable = old_fc8_trainable
+
+    for layer in thaw_layers:
+        model.get_layer(layer).trainable = True
 
     # Compile
     model.compile(
@@ -769,17 +767,11 @@ if __name__ == "__main__":
         type=str,
         nargs="+",
         help="layers to thaw",
-        default=["fc7"],
+        default=["fc7", "fc8"],
     )
     parser.add_argument(
         "--new_weights",
         help="use new weights",
-        default=False,
-        action="store_true",
-    )
-    parser.add_argument(
-        "--freeze_basic",
-        help="freeze basic level classification nodes",
         default=False,
         action="store_true",
     )
@@ -921,11 +913,14 @@ if __name__ == "__main__":
                 f"{args.activation}"
                 f"-lr{args.learningRate}"
                 f"-decay{args.lrDecay}"
-                f"{'-freeze_basic' if args.freeze_basic else ''}"
                 f"{'-new_weights' if args.new_weights else ''}"
                 f"{'-softmax_labels' if args.softmax_labels else ''}"
-                f"{'-batchNorm' if args.batchNorm else ''}"
             )
+            thawed = "-thaw"
+            for layer in args.thaw_layers:
+                thawed += f"{layer}"
+
+            hyperParams += thawed
             loggingFile = f"./models/deepCats/AlexNet/twoHot/seed{seed:02}/training-{hyperParams}.csv"
             print("Logging to ", loggingFile)
             csvLogger = tf.keras.callbacks.CSVLogger(loggingFile, append=True)
@@ -950,7 +945,6 @@ if __name__ == "__main__":
                 thaw_layers=args.thaw_layers,
                 softmax=args.activation == "softmax",
                 reuse_weights=not args.new_weights,
-                old_fc8_trainable=not args.freeze_basic,
             )
     else:  # Main script
         os.environ["CUDA_VISIBLE_DEVICES"] = "1"
