@@ -200,7 +200,9 @@ def create_flat_dataset(
     return ds, weights
 
 
-def create_twohot_dataset(directory, size=224, channel_first=False, batch_size=32):
+def create_twohot_dataset(
+    directory, size=224, channel_first=False, batch_size=32, softmax_labels=False
+):
     """
     Return a dataset given a nested directory structure. If the directory
     contains images, those images will be assigned to that class as one-hot. If
@@ -314,13 +316,15 @@ def create_twohot_dataset(directory, size=224, channel_first=False, batch_size=3
         if len(y) > 1:
             label2 = tf.one_hot(y[1], len(counts))
             label = tf.add(label, label2)
+            if softmax_labels:
+                label = label / 2.0
 
         return x, label
 
     ds = (
         tf.data.Dataset.from_tensor_slices((imgPaths, labels))
         .shuffle(len(imgPaths))
-        .map(_parse_image)
+        .map(_parse_image, num_parallel_calls=tf.data.AUTOTUNE)
         .batch(batch_size)
         .prefetch(tf.data.AUTOTUNE)
     )
@@ -417,6 +421,7 @@ def train_ecocub_model(
     valDs,
     class_weights,
     lr,
+    epochs,
     callbacks=[],
     initial_train=False,
     batch_norm=False,
@@ -513,7 +518,7 @@ def train_ecocub_model(
     # Train model
     fit = model.fit(
         trainDs,
-        epochs=10,
+        epochs=epochs,
         validation_data=valDs,
         class_weight=class_weights,
         callbacks=callbacks,
@@ -528,25 +533,19 @@ def train_twohot_model(
     valDs,
     class_weights,
     lr,
+    epochs,
+    thaw_layers=["fc7", "fc8", "birdFC"],
     softmax=True,
     callbacks=[],
     batch_norm=False,
     reuse_weights=True,
 ):
-    origKernel, origBias = model.get_layer("fc8").get_weights()
-    weightInit = tf.keras.initializers.TruncatedNormal(
-        stddev=0.005
-    )  # It might be better to sample from old weights
-    newWeights = weightInit(shape=(1, 1, 4096, 200))
-    newBias = tf.keras.initializers.zeros()(shape=(200,))
-
-    # Concatenate
-    newWeights = tf.concat([origKernel, newWeights], axis=3)
-    newBias = tf.concat([origBias, newBias], axis=0)
-
     # Freeze all layers
     for layer in model.layers:
         layer.trainable = False
+
+    # Get the output of the previous classification layer
+    basicOutput = model.layers[-3].output
 
     # Get model output at fc dropout layer
     x = model.layers[-4].output
@@ -555,16 +554,18 @@ def train_twohot_model(
     if batch_norm:
         x = tf.keras.layers.BatchNormalization()(x)
 
+    weightInit = tf.keras.initializers.TruncatedNormal(stddev=0.005)
     x = tf.keras.layers.Conv2D(
-        765,
+        200,
         (1, 1),
         padding="same",
         activation=None,
-        name="twoHotFC",
+        name="birdFC",
         kernel_initializer=weightInit,
         kernel_regularizer=tf.keras.regularizers.l2(0.0005),
         bias_initializer=tf.keras.initializers.Zeros(),
     )(x)
+    x = tf.keras.layers.Concatenate()([basicOutput, x])
     x = tf.keras.layers.GlobalAveragePooling2D()(x)
     x = tf.keras.layers.Flatten()(x)
 
@@ -578,9 +579,17 @@ def train_twohot_model(
     # Create new model
     model = tf.keras.Model(inputs=model.input, outputs=[x])
 
-    if reuse_weights:
-        # Plugin the old weights with new concatenated
-        model.get_layer("twoHotFC").set_weights([newWeights, newBias])
+    # Reinitialize fc8 weights if needed
+    if not reuse_weights:
+        # Remake initializer for weights to avoid identical values
+        weightInit = tf.keras.initializers.TruncatedNormal(stddev=0.005)
+        oldWeights, oldBias = model.get_layer("fc8").get_weights()
+        newWeights = weightInit(tf.shape(oldWeights))
+        newBias = tf.keras.initializers.Zeros()(tf.shape(oldBias))
+        model.get_layer("fc8").set_weights([newWeights, newBias])
+
+    for layer in thaw_layers:
+        model.get_layer(layer).trainable = True
 
     # Compile
     model.compile(
@@ -601,7 +610,7 @@ def train_twohot_model(
     # Train model
     fit = model.fit(
         trainDs,
-        epochs=10,
+        epochs=epochs,
         validation_data=valDs,
         callbacks=callbacks,
         class_weight=class_weights,
@@ -619,23 +628,23 @@ class TwoHotBirdAccuracy(tf.keras.metrics.Metric):
 
     @tf.function
     def update_state(self, y_true, y_pred, sample_weight=None):
+        # Reshape to ensure a batch dimensions
+        y_true = tf.reshape(y_true, (-1, 765))
+        y_pred = tf.reshape(y_pred, (-1, 765))
+
+        # Only keep the last 200 classes
+        y_true = y_true[:, -200:]
+        y_pred = y_pred[:, -200:]
+
         # Find the samples with two-hot
         trueSums = tf.reduce_sum(y_true, axis=1)
-        birdIndices = tf.where(tf.equal(trueSums, 2))
+        birdIndices = tf.where(tf.greater(trueSums, 0))
         birdIndices = tf.squeeze(birdIndices)
 
         if tf.size(birdIndices) != 0:
             # Get the true and predicted labels for those samples
             y_true = tf.gather(y_true, birdIndices)
             y_pred = tf.gather(y_pred, birdIndices)
-
-            # Reshape to ensure a batch dimensions
-            y_true = tf.reshape(y_true, (-1, 765))
-            y_pred = tf.reshape(y_pred, (-1, 765))
-
-            # Only keep the last 200 classes
-            y_true = y_true[:, -200:]
-            y_pred = y_pred[:, -200:]
 
             # Get labels
             y_true = tf.argmax(y_true, axis=-1, output_type=tf.int32)
@@ -716,7 +725,24 @@ if __name__ == "__main__":
         "--seed",
         type=int,
         help="seed to use for training",
-        required=True,
+    )
+    parser.add_argument(
+        "--learningRate",
+        type=float,
+        help="initial learning rate to use for training",
+        default=0.001,
+    )
+    parser.add_argument(
+        "--lrDecay",
+        type=float,
+        help="learning rate decay factor",
+        default=1,
+    )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        help="number of epochs to train for",
+        default=10,
     )
     parser.add_argument(
         "--augment",
@@ -726,9 +752,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--batchNorm",
-        type=bool,
         help="whether to use batch normalization",
         default=False,
+        action="store_true",
     )
     parser.add_argument(
         "--dataDir",
@@ -737,8 +763,21 @@ if __name__ == "__main__":
         default="./images/",
     )
     parser.add_argument(
+        "--thaw_layers",
+        type=str,
+        nargs="+",
+        help="layers to thaw",
+        default=["fc7", "fc8"],
+    )
+    parser.add_argument(
         "--new_weights",
         help="use new weights",
+        default=False,
+        action="store_true",
+    )
+    parser.add_argument(
+        "--softmax_labels",
+        help="use softmax labels for multiple labels",
         default=False,
         action="store_true",
     )
@@ -750,6 +789,12 @@ if __name__ == "__main__":
         choices=["softmax", "sigmoid"],
     )
     parser.add_argument(
+        "--gpu_id",
+        type=str,
+        help="which gpu to use",
+        default=None,
+    )
+    parser.add_argument(
         "--debug",
         help="whether to use debug mode",
         default=False,
@@ -758,8 +803,16 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    # If a gpu id is given, use that gpu
+    if args.gpu_id is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
+        strategy = tf.distribute.get_strategy()
+    else:
+        strategy = tf.distribute.MirroredStrategy()
+
     seed = args.seed
-    tf.random.set_seed(seed)
+    tf.keras.utils.set_random_seed(seed)
+    tf.config.experimental.enable_op_determinism()
 
     tf.config.run_functions_eagerly(args.debug)
 
@@ -776,7 +829,8 @@ if __name__ == "__main__":
             os.path.join(dataDir, "ecoCUB", "train"), size=size
         )
         valDs, _ = create_flat_dataset(
-            os.path.join(dataDir, "ecoCUB", "val"), size=size,
+            os.path.join(dataDir, "ecoCUB", "val"),
+            size=size,
         )
 
         weightPath = f"./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_{seed:02}/model.ckpt_epoch89"
@@ -793,14 +847,22 @@ if __name__ == "__main__":
             monitor="val_loss",
             save_freq="epoch",
         )
+
+        hyperParams = (
+            f"-lr{args.learningRate}"
+            f"-decay{args.lrDecay}"
+            f"{'-new_weights' if args.new_weights else ''}"
+        )
+        loggingFile = f"./models/deepCats/AlexNet/ecoCUBAmnesia/seed{seed:02}/training{hyperParams}.csv"
+        print("Logging to ", loggingFile)
         csvLogger = tf.keras.callbacks.CSVLogger(
-            f"./models/deepCats/AlexNet/ecoCUBAmnesia/seed{seed:02}/training.csv",
+            loggingFile,
             append=True,
         )
 
         def exp_schedule(epoch):
-            lr = 0.001
-            return lr * tf.math.pow(0.5, epoch)
+            lr = args.learningRate
+            return lr * tf.math.pow(args.lrDecay, epoch)
 
         schedule = tf.keras.callbacks.LearningRateScheduler(exp_schedule, verbose=1)
         callbacks = [checkpoint, csvLogger, schedule]
@@ -811,56 +873,141 @@ if __name__ == "__main__":
             trainDs=trainDs,
             valDs=valDs,
             class_weights=weights,
-            lr=0.001,
+            lr=args.learningRate,
+            epochs=args.epochs,
             callbacks=callbacks,
             batch_norm=batchNorm,
             reuse_weights=not args.new_weights,
         )
     elif args.script == "twoHot":
         weightPath = f"./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_{seed:02}/model.ckpt_epoch89"
-        model = ecoset.make_alex_net_v2(
-            weights_path=weightPath,
-            input_shape=(224, 224, 3),
-        )
+        with strategy.scope():
+            model = ecoset.make_alex_net_v2(
+                weights_path=weightPath,
+                input_shape=(224, 224, 3),
+            )
 
+            trainDs, weights = create_twohot_dataset(
+                os.path.join(args.dataDir, "train"),
+                size=224,
+                channel_first=False,
+                batch_size=32,
+                softmax_labels=args.softmax_labels,
+            )
+            valDs, _ = create_twohot_dataset(
+                os.path.join(args.dataDir, "val"),
+                size=224,
+                channel_first=False,
+                batch_size=32,
+                softmax_labels=args.softmax_labels,
+            )
+
+            # Make callbacks
+            checkpoint = tf.keras.callbacks.ModelCheckpoint(
+                f"./models/deepCats/AlexNet/twoHot/seed{seed:02}/epoch{{epoch:02d}}-val_loss{{val_loss:.2f}}.hdf5",
+                monitor="val_loss",
+                save_freq="epoch",
+            )
+
+            hyperParams = (
+                f"{args.activation}"
+                f"-lr{args.learningRate}"
+                f"-decay{args.lrDecay}"
+                f"{'-new_weights' if args.new_weights else ''}"
+                f"{'-softmax_labels' if args.softmax_labels else ''}"
+            )
+            thawed = "-thaw"
+            for layer in args.thaw_layers:
+                thawed += f"{layer}"
+
+            hyperParams += thawed
+            loggingFile = f"./models/deepCats/AlexNet/twoHot/seed{seed:02}/training-{hyperParams}.csv"
+            print("Logging to ", loggingFile)
+            csvLogger = tf.keras.callbacks.CSVLogger(loggingFile, append=True)
+
+            def exp_schedule(epoch):
+                lr = args.learningRate
+                return lr * tf.math.pow(args.lrDecay, epoch)
+
+            schedule = tf.keras.callbacks.LearningRateScheduler(exp_schedule, verbose=1)
+            callbacks = [checkpoint, csvLogger, schedule]
+
+            # Train model
+            fit = train_twohot_model(
+                model=model,
+                trainDs=trainDs,
+                valDs=valDs,
+                lr=args.learningRate,
+                epochs=args.epochs,
+                class_weights=weights,
+                batch_norm=args.batchNorm,
+                callbacks=callbacks,
+                thaw_layers=args.thaw_layers,
+                softmax=args.activation == "softmax",
+                reuse_weights=not args.new_weights,
+            )
+    else:  # Main script
+        os.environ["CUDA_VISIBLE_DEVICES"] = "1"
         trainDs, weights = create_twohot_dataset(
-            os.path.join(args.dataDir, "train"),
+            os.path.join("./images/ecoset_nestedCUB", "train"),
             size=224,
             channel_first=False,
             batch_size=32,
         )
         valDs, _ = create_twohot_dataset(
-            os.path.join(args.dataDir, "val"),
+            os.path.join("./images/ecoset_nestedCUB", "val"),
             size=224,
             channel_first=False,
             batch_size=32,
         )
 
+        model = tf.keras.models.load_model(
+            "./models/deepCats/AlexNet/twoHot/seed01/epoch10-softmax-lr-0.01-decay0.5hdf5",
+            custom_objects={"TwoHotBirdAccuracy": TwoHotBirdAccuracy},
+        )
+
+        model.summary()
+
+        class_weights = {i: weights[i] for i in range(len(weights))}
+
         # Make callbacks
         checkpoint = tf.keras.callbacks.ModelCheckpoint(
-            f"./models/deepCats/AlexNet/twoHot/seed{seed:02}/epoch{{epoch:02d}}-val_loss{{val_loss:.2f}}.hdf5",
+            f"./models/deepCats/AlexNet/twoHot/seed01/epoch{{epoch:02d}}-val_loss{{val_loss:.2f}}.hdf5",
             monitor="val_loss",
             save_freq="epoch",
         )
+
+        hyperParams = (
+            f"{args.activation}"
+            f"-lr{args.learningRate}"
+            f"-decay{args.lrDecay}"
+            f"{'-freeze_basic' if args.freeze_basic else ''}"
+            f"{'-new_weights' if args.new_weights else ''}"
+        )
+        loggingFile = (
+            f"./models/deepCats/AlexNet/twoHot/seed01/training-{hyperParams}.csv"
+        )
+        print("Logging to ", loggingFile)
         csvLogger = tf.keras.callbacks.CSVLogger(
-            f"./models/deepCats/AlexNet/twoHot/seed{seed:02}/training.csv", append=True
+            loggingFile,
+            append=True,
         )
 
         def exp_schedule(epoch):
-            lr = 0.001
-            return lr * tf.math.pow(0.5, epoch)
+            lr = tf.constant(args.learningRate, dtype=tf.float32)
+            epoch = tf.constant(epoch, dtype=tf.float32)
+            lrDecay = tf.constant(args.lrDecay, dtype=tf.float32)
+            return lr * tf.math.pow(lrDecay, epoch)
 
         schedule = tf.keras.callbacks.LearningRateScheduler(exp_schedule, verbose=1)
         callbacks = [checkpoint, csvLogger, schedule]
 
-        fit = train_twohot_model(
-            model=model,
-            trainDs=trainDs,
-            valDs=valDs,
-            lr=0.001,
-            class_weights=weights,
-            batch_norm=args.batchNorm,
+        # Train model
+        fit = model.fit(
+            trainDs,
+            epochs=20,
+            initial_epoch=10,
+            validation_data=valDs,
             callbacks=callbacks,
-            softmax=args.activation == "softmax",
-            reuse_weights=not args.new_weights,
+            class_weight=class_weights,
         )
