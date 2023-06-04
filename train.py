@@ -303,7 +303,9 @@ def create_twohot_dataset(
         x = tf.keras.preprocessing.image.smart_resize(x, (size, size))
 
         # Center features
-        x = 2 * (x / 255 - 0.5)
+        x = tf.divide(x, 255.0)
+        x = tf.subtract(x, 0.5)
+        x = tf.multiply(x, 2.0)
 
         # Transpose to channel first format
         if channel_first:
@@ -313,7 +315,7 @@ def create_twohot_dataset(
         label = tf.one_hot(y[0], len(counts))
 
         # If y has a second element, turn that into a one hot and add it to y
-        if len(y) > 1:
+        if tf.size(y) > 1:
             label2 = tf.one_hot(y[1], len(counts))
             label = tf.add(label, label2)
             if softmax_labels:
@@ -810,7 +812,7 @@ if __name__ == "__main__":
     else:
         strategy = tf.distribute.MirroredStrategy()
 
-    seed = args.seed
+    seed = args.seed if args.seed is not None else 2023
     tf.keras.utils.set_random_seed(seed)
     tf.config.experimental.enable_op_determinism()
 
@@ -947,67 +949,16 @@ if __name__ == "__main__":
                 reuse_weights=not args.new_weights,
             )
     else:  # Main script
+        import tensorflow_datasets as tfds
+
         os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+
         trainDs, weights = create_twohot_dataset(
-            os.path.join("./images/ecoset_nestedCUB", "train"),
+            "./images/ecoset_nestedCUB/train",
             size=224,
             channel_first=False,
             batch_size=32,
-        )
-        valDs, _ = create_twohot_dataset(
-            os.path.join("./images/ecoset_nestedCUB", "val"),
-            size=224,
-            channel_first=False,
-            batch_size=32,
+            softmax_labels=args.softmax_labels,
         )
 
-        model = tf.keras.models.load_model(
-            "./models/deepCats/AlexNet/twoHot/seed01/epoch10-softmax-lr-0.01-decay0.5hdf5",
-            custom_objects={"TwoHotBirdAccuracy": TwoHotBirdAccuracy},
-        )
-
-        model.summary()
-
-        class_weights = {i: weights[i] for i in range(len(weights))}
-
-        # Make callbacks
-        checkpoint = tf.keras.callbacks.ModelCheckpoint(
-            f"./models/deepCats/AlexNet/twoHot/seed01/epoch{{epoch:02d}}-val_loss{{val_loss:.2f}}.hdf5",
-            monitor="val_loss",
-            save_freq="epoch",
-        )
-
-        hyperParams = (
-            f"{args.activation}"
-            f"-lr{args.learningRate}"
-            f"-decay{args.lrDecay}"
-            f"{'-freeze_basic' if args.freeze_basic else ''}"
-            f"{'-new_weights' if args.new_weights else ''}"
-        )
-        loggingFile = (
-            f"./models/deepCats/AlexNet/twoHot/seed01/training-{hyperParams}.csv"
-        )
-        print("Logging to ", loggingFile)
-        csvLogger = tf.keras.callbacks.CSVLogger(
-            loggingFile,
-            append=True,
-        )
-
-        def exp_schedule(epoch):
-            lr = tf.constant(args.learningRate, dtype=tf.float32)
-            epoch = tf.constant(epoch, dtype=tf.float32)
-            lrDecay = tf.constant(args.lrDecay, dtype=tf.float32)
-            return lr * tf.math.pow(lrDecay, epoch)
-
-        schedule = tf.keras.callbacks.LearningRateScheduler(exp_schedule, verbose=1)
-        callbacks = [checkpoint, csvLogger, schedule]
-
-        # Train model
-        fit = model.fit(
-            trainDs,
-            epochs=20,
-            initial_epoch=10,
-            validation_data=valDs,
-            callbacks=callbacks,
-            class_weight=class_weights,
-        )
+        tfds.benchmark(trainDs, batch_size=32)
