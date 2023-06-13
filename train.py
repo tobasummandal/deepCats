@@ -64,6 +64,10 @@ def create_nested_dataset(directory, size=224, channel_first=False, batch_size=3
 
         basicCounts = np.append(basicCounts, basicCount)
 
+    # Convert imgPaths and labels to tensors
+    imgPaths = tf.constant(imgPaths)
+    labels = tf.ragged.constant(labels)
+
     # Add non-bird count
     subCounts = np.append(subCounts, np.sum(basicCounts) - np.sum(subCounts))
 
@@ -948,66 +952,9 @@ if __name__ == "__main__":
             )
     else:  # Main script
         os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-        trainDs, weights = create_twohot_dataset(
+        trainDs, weights = create_nested_dataset(
             os.path.join("./images/ecoset_nestedCUB", "train"),
             size=224,
             channel_first=False,
             batch_size=32,
-        )
-        valDs, _ = create_twohot_dataset(
-            os.path.join("./images/ecoset_nestedCUB", "val"),
-            size=224,
-            channel_first=False,
-            batch_size=32,
-        )
-
-        model = tf.keras.models.load_model(
-            "./models/deepCats/AlexNet/twoHot/seed01/epoch10-softmax-lr-0.01-decay0.5hdf5",
-            custom_objects={"TwoHotBirdAccuracy": TwoHotBirdAccuracy},
-        )
-
-        model.summary()
-
-        class_weights = {i: weights[i] for i in range(len(weights))}
-
-        # Make callbacks
-        checkpoint = tf.keras.callbacks.ModelCheckpoint(
-            f"./models/deepCats/AlexNet/twoHot/seed01/epoch{{epoch:02d}}-val_loss{{val_loss:.2f}}.hdf5",
-            monitor="val_loss",
-            save_freq="epoch",
-        )
-
-        hyperParams = (
-            f"{args.activation}"
-            f"-lr{args.learningRate}"
-            f"-decay{args.lrDecay}"
-            f"{'-freeze_basic' if args.freeze_basic else ''}"
-            f"{'-new_weights' if args.new_weights else ''}"
-        )
-        loggingFile = (
-            f"./models/deepCats/AlexNet/twoHot/seed01/training-{hyperParams}.csv"
-        )
-        print("Logging to ", loggingFile)
-        csvLogger = tf.keras.callbacks.CSVLogger(
-            loggingFile,
-            append=True,
-        )
-
-        def exp_schedule(epoch):
-            lr = tf.constant(args.learningRate, dtype=tf.float32)
-            epoch = tf.constant(epoch, dtype=tf.float32)
-            lrDecay = tf.constant(args.lrDecay, dtype=tf.float32)
-            return lr * tf.math.pow(lrDecay, epoch)
-
-        schedule = tf.keras.callbacks.LearningRateScheduler(exp_schedule, verbose=1)
-        callbacks = [checkpoint, csvLogger, schedule]
-
-        # Train model
-        fit = model.fit(
-            trainDs,
-            epochs=20,
-            initial_epoch=10,
-            validation_data=valDs,
-            callbacks=callbacks,
-            class_weight=class_weights,
         )
