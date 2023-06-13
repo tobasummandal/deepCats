@@ -5,7 +5,9 @@ import ecoset
 from sklearn.utils.class_weight import compute_sample_weight
 
 
-def create_nested_dataset(directory, size=224, channel_first=False, batch_size=32):
+def create_nested_dataset(
+    directory, size=224, channel_first=False, batch_size=32, not_birds=True
+):
     """
     Create tf.Data.Dataset objects from the train and val directories, assumes
     that we have one directory that has subdirectories so we will have multi-
@@ -22,7 +24,7 @@ def create_nested_dataset(directory, size=224, channel_first=False, batch_size=3
     for folder in basicClasses:
         files = os.listdir(os.path.join(directory, folder))
         if os.path.isdir(os.path.join(directory, folder, files[0])):
-            nSub = len(files) + 1  # +1 for non-bird
+            nSub = len(files) + 1 if not_birds else len(files)  # +1 for non-bird
             break
 
     imgPaths = []
@@ -64,9 +66,14 @@ def create_nested_dataset(directory, size=224, channel_first=False, batch_size=3
 
         basicCounts = np.append(basicCounts, basicCount)
 
+    # Convert imgPaths and labels to tensors
+    imgPaths = tf.constant(imgPaths)
+    labels = tf.constant(labels)
+
     # Add non-bird count
     subCounts = np.append(subCounts, np.sum(basicCounts) - np.sum(subCounts))
 
+    @tf.function
     def _parse_image(x, y):
         # Decode image
         x = tf.io.read_file(x)
@@ -86,20 +93,19 @@ def create_nested_dataset(directory, size=224, channel_first=False, batch_size=3
             x = tf.transpose(x, (2, 0, 1))
 
         # One-hot encode labels
-        y = (tf.one_hot(y[0], nBasic), tf.one_hot(y[1], nSub))
+        basicLabel = tf.one_hot(y[0], nBasic)
 
-        return x, y
+        if (not not_birds) and tf.equal(y[1], 200):
+            subLabel = tf.zeros(nSub)
+        else:
+            subLabel = tf.one_hot(y[1], nSub)
+
+        return x, (basicLabel, subLabel)
 
     ds = (
-        tf.data.Dataset.from_generator(
-            lambda: zip(imgPaths, labels),
-            output_signature=(
-                tf.TensorSpec(shape=(), dtype=tf.string),  # type: ignore
-                tf.TensorSpec(shape=(), dtype=tf.int32),  # type: ignore
-            ),
-        )
+        tf.data.Dataset.from_tensor_slices((imgPaths, labels))
         .shuffle(len(imgPaths))
-        .map(_parse_image)
+        .map(_parse_image, num_parallel_calls=tf.data.AUTOTUNE)
         .batch(batch_size)
         .prefetch(tf.data.AUTOTUNE)
     )
@@ -338,74 +344,6 @@ def create_twohot_dataset(
     return ds, weights
 
 
-def make_expert_model(
-    model,
-    layer_idx,
-    num_layers,
-    n_thaw,
-    basicWeights=None,
-    subWeights=None,
-    loss_weights=[1, 1],
-):
-    """
-    Return a copy of the model with an additional expert branch added at
-    layer_idx. The expert branch will be num_layers layers deep. All old layers
-    behind layer_idx - n_thaw will be frozen.
-    """
-    # Turn negative indices positive
-    if layer_idx < 0:
-        layer_idx = len(model.layers) + layer_idx
-
-    # Freeze layers
-    for layer in model.layers[: layer_idx - n_thaw]:
-        print(f"Freezing layer {layer.name}")
-        layer.trainable = False
-
-    # Get output
-    outputs = model.outputs
-
-    # Get the layer to add to
-    layer = model.layers[layer_idx]
-    print(f"Adding branch to layer {layer.name}")
-    x = layer.output
-
-    for _ in range(num_layers):
-        x = tf.keras.layers.Conv2D(1024, 3, activation="relu", padding="same")(x)
-
-    # Add expert branch
-    x = tf.keras.layers.Conv2D(201, 5, activation=None, padding="same")(x)
-    x = tf.keras.layers.GlobalAveragePooling2D()(x)
-    x = tf.keras.layers.Flatten()(x)
-    x = tf.keras.layers.Softmax()(x)
-
-    # Create new model
-    model = tf.keras.Model(inputs=model.input, outputs=outputs + [x])
-
-    if basicWeights is None or subWeights is None:
-        model.compile(
-            optimizer=tf.keras.optimizers.Adam(),
-            loss=[
-                tf.keras.losses.CategoricalCrossentropy(),
-                tf.keras.losses.CategoricalCrossentropy(),
-            ],
-            metrics=["accuracy"],
-            loss_weights=loss_weights,
-        )
-
-    else:
-        model.compile(
-            optimizer=tf.keras.optimizers.Adam(),
-            loss=[
-                weighted_cce(basicWeights),
-                weighted_cce(subWeights),
-            ],
-            metrics=["accuracy"],
-            loss_weights=loss_weights,
-        )
-
-    return model
-
-
 class weighted_cce(tf.keras.losses.Loss):
     def __init__(self, weights, **kwargs):
         super().__init__(**kwargs)
@@ -542,10 +480,6 @@ def train_twohot_model(
     batch_norm=False,
     reuse_weights=True,
 ):
-    # Freeze all layers
-    for layer in model.layers:
-        layer.trainable = False
-
     # Get the output of the previous classification layer
     basicOutput = model.layers[-3].output
 
@@ -565,7 +499,6 @@ def train_twohot_model(
         name="birdFC",
         kernel_initializer=weightInit,
         kernel_regularizer=tf.keras.regularizers.l2(0.0005),
-        bias_initializer=tf.keras.initializers.Zeros(),
     )(x)
     x = tf.keras.layers.Concatenate()([basicOutput, x])
     x = tf.keras.layers.GlobalAveragePooling2D()(x)
@@ -589,6 +522,10 @@ def train_twohot_model(
         newWeights = weightInit(tf.shape(oldWeights))
         newBias = tf.keras.initializers.Zeros()(tf.shape(oldBias))
         model.get_layer("fc8").set_weights([newWeights, newBias])
+
+    # Freeze all layers
+    for layer in model.layers:
+        layer.trainable = False
 
     for layer in thaw_layers:
         model.get_layer(layer).trainable = True
@@ -616,6 +553,93 @@ def train_twohot_model(
         validation_data=valDs,
         callbacks=callbacks,
         class_weight=class_weights,
+    )
+
+    return fit
+
+
+def train_branch_model(
+    model,
+    trainDs,
+    valDs,
+    basic_weights,
+    sub_weights,
+    lr,
+    epochs,
+    branch_layer="fc7",
+    loss_weights=[1, 1],
+    thaw_layers=["fc7", "fc8", "birdFC"],
+    callbacks=[],
+    non_bird_node=True,
+):
+    """
+    Take an Alexmodel and modify it to have a branch for basic and subordinate
+    classification. The branch is added after the layer specified by layer_idx.
+    """
+    # Get output
+    outputs = model.outputs
+
+    # Get the layer to add to
+    layer = model.get_layer(branch_layer)
+    print(f"Adding branch to layer {layer.name}")
+    x = layer.output
+
+    # Add expert branch
+    subNodes = 201 if non_bird_node else 200
+    x = tf.keras.layers.Conv2D(
+        subNodes,
+        5,
+        activation=None,
+        padding="same",
+        name="birdFC",
+        kernel_initializer=tf.keras.initializers.TruncatedNormal(stddev=0.005),
+        bias_initializer=tf.keras.initializers.Zeros(),
+        kernel_regularizer=tf.keras.regularizers.l2(0.0005),
+    )(x)
+    x = tf.keras.layers.GlobalAveragePooling2D()(x)
+    x = tf.keras.layers.Flatten()(x)
+    x = tf.keras.layers.Softmax(name="birdSub")(x)
+
+    # Create new model
+    model = tf.keras.Model(inputs=model.input, outputs=outputs + [x])
+
+    # Freeze all layers
+    for layer in model.layers:
+        layer.trainable = False
+
+    # Thaw layers
+    for layer in thaw_layers:
+        model.get_layer(layer).trainable = True
+
+    if basic_weights is None or sub_weights is None:
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(lr=lr, epsilon=0.1),
+            loss=[
+                tf.keras.losses.CategoricalCrossentropy(),
+                tf.keras.losses.CategoricalCrossentropy(),
+            ],
+            metrics=["accuracy", "top_k_categorical_accuracy"],
+            loss_weights=loss_weights,
+        )
+    else:
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=lr, epsilon=0.1),
+            loss=[
+                weighted_cce(basic_weights),
+                weighted_cce(sub_weights),
+            ],
+            metrics=["accuracy", "top_k_categorical_accuracy"],
+            loss_weights=loss_weights,
+        )
+
+    model.summary()
+
+    # Train model
+    fit = model.fit(
+        trainDs,
+        epochs=epochs,
+        validation_data=valDs,
+        callbacks=callbacks,
     )
 
     return fit
@@ -721,7 +745,7 @@ if __name__ == "__main__":
         "--script",
         type=str,
         help="type of model to train",
-        choices=["ecoCubAmnesia", "twoHot"],
+        choices=["ecoCubAmnesia", "twoHot", "branch"],
     )
     parser.add_argument(
         "--seed",
@@ -788,7 +812,13 @@ if __name__ == "__main__":
         type=str,
         help="activation function to use",
         default="softmax",
-        choices=["softmax", "sigmoid"],
+        choices=["softmax", "sigmoid", "zero_hot"],
+    )
+    parser.add_argument(
+        "--sub_loss_weight",
+        type=float,
+        help="weight of the sub loss",
+        default=0.5,
     )
     parser.add_argument(
         "--gpu_id",
@@ -948,17 +978,87 @@ if __name__ == "__main__":
                 softmax=args.activation == "softmax",
                 reuse_weights=not args.new_weights,
             )
+    elif args.script == "branch":
+        # Weight path
+        weightPath = f"./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_{seed:02}/model.ckpt_epoch89"
+
+        with strategy.scope():
+            model = ecoset.make_alex_net_v2(
+                weights_path=weightPath,
+                input_shape=(224, 224, 3),
+                softmax=True,
+            )
+
+            # Create datasets
+            trainDs, basicWeights, subWeights = create_nested_dataset(
+                os.path.join(args.dataDir, "train"),
+                size=224,
+                not_birds=args.activation != "zero_hot",
+            )
+            valDs, _, _ = create_nested_dataset(
+                os.path.join(args.dataDir, "val"),
+                size=224,
+                not_birds=args.activation != "zero_hot",
+            )
+
+            # Make callbacks
+            checkpoint = tf.keras.callbacks.ModelCheckpoint(
+                f"./models/deepCats/AlexNet/branch/seed{seed:02}/epoch{{epoch:02d}}-val_loss{{val_loss:.2f}}.hdf5",
+                monitor="val_loss",
+                save_freq="epoch",
+            )
+
+            def exp_schedule(epoch):
+                lr = args.learningRate
+                return lr * tf.math.pow(args.lrDecay, epoch)
+
+            schedule = tf.keras.callbacks.LearningRateScheduler(exp_schedule, verbose=1)
+
+            hyperParams = (
+                f"-lr{args.learningRate}"
+                f"-decay{args.lrDecay}"
+                f"-sub_loss_weight{args.sub_loss_weight}"
+                f"-{args.activation}"
+            )
+
+            thawed = "-thaw"
+            for layer in args.thaw_layers:
+                thawed += f"{layer}"
+            hyperParams += thawed
+
+            loggingFile = f"./models/deepCats/AlexNet/branch/seed{seed:02}/training-{hyperParams}.csv"
+            print("Logging to ", loggingFile)
+            csvLogger = tf.keras.callbacks.CSVLogger(loggingFile, append=True)
+
+            loss_weight = [1 - args.sub_loss_weight, args.sub_loss_weight]
+            fit = train_branch_model(
+                model=model,
+                trainDs=trainDs,
+                valDs=valDs,
+                thaw_layers=args.thaw_layers,
+                basic_weights=basicWeights,
+                sub_weights=subWeights,
+                lr=args.learningRate,
+                epochs=args.epochs,
+                non_bird_node=args.activation != "zero_hot",
+                callbacks=[checkpoint, csvLogger, schedule],
+                loss_weights=loss_weight,
+            )
+
     else:  # Main script
-        import tensorflow_datasets as tfds
+        # tf.config.run_functions_eagerly(True)
+        # tf.data.experimental.enable_debug_mode()
 
-        os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-
-        trainDs, weights = create_twohot_dataset(
+        trainDs, basicWeights, subWeights = create_nested_dataset(
             "./images/ecoset_nestedCUB/train",
             size=224,
             channel_first=False,
             batch_size=32,
-            softmax_labels=args.softmax_labels,
+            not_birds=False,
         )
 
-        tfds.benchmark(trainDs, batch_size=32)
+        while True:
+            # Get a batch
+            img, (basicLabel, subLabel) = list(trainDs.take(1).as_numpy_iterator())[0]
+            if np.any(basicLabel[:, 25] == 1):
+                subLabel
