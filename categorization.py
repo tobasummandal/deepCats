@@ -385,13 +385,24 @@ def simulate_cat_verification(
     simFun,
     criterion,
     maxImgs=None,
+    catRepIdxs=None,
 ):
     """
     Return a dataframe simulating the results of a category verification task.
     """
     # Setup dataframe
     performance = pd.DataFrame(
-        columns=["seed", "model", "image", "category", "level", "response", "RT"]
+        columns=[
+            "seed",
+            "model",
+            "image",
+            "category",
+            "level",
+            "response",
+            "RT",
+            "crit",
+            "maxImgs",
+        ]
     )
 
     # Get number of models
@@ -404,11 +415,24 @@ def simulate_cat_verification(
     for category in categories:
         # Get the representations of this category
         catIdx = testImgInfo[testImgInfo[categoryCol] == category].index
+
+        if catRepIdxs is not None:
+            catIdxs = catRepIdxs[category]
+
         # Loop through models
         for i in range(nModels):
             # Get reps for this model
             memoryModelReps = memoryReps[i, catIdx, :]
             testModelReps = testReps[i, catIdx, :]
+
+            if catRepIdxs is not None:
+                catIdxs = np.unique(np.concatenate(catRepIdxs[category]))
+                memoryModelReps = memoryModelReps[:, :, :, catIdxs]
+                testModelReps = testModelReps[:, :, :, catIdxs]
+
+            # Flatten reps
+            memoryModelReps = memoryModelReps.reshape(memoryModelReps.shape[0], -1)
+            testModelReps = testModelReps.reshape(testModelReps.shape[0], -1)
 
             # Loop through images
             for j, imgRep in enumerate(testModelReps):
@@ -441,6 +465,8 @@ def simulate_cat_verification(
                                 "level": categoryCol,
                                 "response": resp,
                                 "RT": rt,
+                                "crit": criterion,
+                                "maxImgs": maxImgs,
                             },
                             index=[0],
                         ),
@@ -450,12 +476,15 @@ def simulate_cat_verification(
     return performance
 
 
-def cluster_index(imgInfo, levelCol, category, imgSet, simMat):
+def cluster_index(imgInfo, levelCol, category, imgSet, simMat, normalize=False):
     loc = (imgInfo[levelCol] == category) & (imgInfo["set"] == imgSet)
     withinIdxs = imgInfo.loc[loc, "name"].index
 
     loc = (imgInfo[levelCol] != category) & (imgInfo["set"] == imgSet)
     betweenIdxs = imgInfo.loc[loc, "name"].index
+
+    if normalize:
+        simMat = simMat / np.max(simMat)
 
     withinSum = 0
     withinCount = 0
