@@ -5,6 +5,9 @@ import os
 import shutil
 import glob
 import numpy as np
+import gc
+import categorization as cat
+from scipy.spatial.distance import pdist, squareform
 
 
 def make_output_model(model, average_pooling=True, flatten=True):
@@ -144,7 +147,7 @@ def split_CUB200_data(source_dir, target_dir):
     return None
 
 
-def get_reps_over_training(modelDir, layer, images):
+def get_reps_over_training(modelDir: str, layer: str, images: np.ndarray):
     """
     Return representation from layer of the images over training from modelDir.
     We expect modelDir to have saved models over epochs.
@@ -153,22 +156,25 @@ def get_reps_over_training(modelDir, layer, images):
     modelFiles = glob.glob(os.path.join(modelDir, "*.hdf5"))
     modelFiles.sort()
 
+    # Load one model to figure out size
+    model = tf.keras.models.load_model(modelFiles[0])
+    x = model.get_layer(layer).output
+
     # Preallocate shape of representations
-    reps = np.zeros((len(modelFiles), images.shape[0], (5 * 5 * 4096)))
+    reps = np.zeros([len(modelFiles), images.shape[0]] + list(x.shape[1:]))
 
     # Loop through models
     for i, modelFile in enumerate(modelFiles):
         # Cleanup so we don't run out of GPU memory
+        del model
         tf.keras.backend.clear_session()
+        gc.collect()
 
         # Load model
         model = tf.keras.models.load_model(modelFile)
 
         # Get output at target layer
         x = model.get_layer(layer).output
-
-        # Add flatten layer
-        x = tf.keras.layers.Flatten()(x)
 
         # Compile model
         model = tf.keras.models.Model(inputs=model.input, outputs=x)
@@ -177,6 +183,45 @@ def get_reps_over_training(modelDir, layer, images):
         reps[i] = model.predict(images)
 
     return reps
+
+
+def compute_sims_over_training(modelDir: str, layer: str, images: np.ndarray):
+    """
+    Return a similarity matrix over training from modelDir at layer using images.
+    """
+    # Get model files
+    modelFiles = glob.glob(os.path.join(modelDir, "*.hdf5"))
+    modelFiles.sort()
+
+    # Preallocate similarity matrix
+    simMat = np.zeros([len(modelFiles), images.shape[0], images.shape[0]])
+
+    # Loop through models
+    for i, modelFile in enumerate(modelFiles):
+        # Load model
+        model = tf.keras.models.load_model(modelFile)
+
+        # Get output at target layer
+        x = model.get_layer(layer).output
+
+        # Compile model
+        model = tf.keras.models.Model(inputs=model.input, outputs=x)
+
+        # Get representations
+        reps = model.predict(images)
+
+        # Flatten reps
+        reps = reps.reshape(reps.shape[0], -1)
+
+        # Calculate similarity matrix
+        simMat[i] = squareform(pdist(reps, metric=cat.gcm_sim))
+
+        # Cleanup so we don't run out of GPU memory
+        del model
+        tf.keras.backend.clear_session()
+        gc.collect()
+
+    return simMat
 
 
 if __name__ == "__main__":
