@@ -4,6 +4,7 @@ import numpy as np
 import tensorflow as tf
 import pandas as pd
 from itertools import combinations
+import numba as nb
 
 
 # List folders
@@ -139,8 +140,19 @@ def gcm_sim(rep1, rep2, r=2.0, c=1.0, p=1.0):
     Return the GCM similarity between two representations with equal attention
     weights.
     """
-    assert np.all(rep1.shape == rep2.shape)
+    weights = np.ones(rep1.shape[0]) / rep1.shape[0]
 
+    dist = np.sum(weights * (np.abs(rep1 - rep2) ** r)) ** (1.0 / r)
+
+    return np.exp(-c * dist**p)
+
+
+@nb.jit(nopython=True, parallel=True, fastmath=True)
+def gcm_sim_numba(rep1, rep2, r=2.0, c=1.0, p=1.0):
+    """
+    Return the GCM similarity between two representations with equal attention
+    weights.
+    """
     weights = np.ones(rep1.shape[0]) / rep1.shape[0]
 
     dist = np.sum(weights * (np.abs(rep1 - rep2) ** r)) ** (1.0 / r)
@@ -502,7 +514,69 @@ def cluster_index(imgInfo, levelCol, category, imgSet, simMat, normalize=False):
     return (withinSum / withinCount) - (betweenSum / betweenCount)
 
 
+def calculate_sim_mat(reps, simFun, *args):
+    """
+    Return a similarity matrix between each representation in reps using simFun.
+    """
+    # Preallocate similarity matrix
+    simMat = np.zeros([reps.shape[0], reps.shape[0]], dtype=np.float32)
+
+    # Loop through representations
+    for i in range(reps.shape[0]):
+        # Loop through other representations
+        for j in range(i + 1, reps.shape[0]):
+            # Calculate similarity
+            simMat[i, j] = simFun(reps[i], reps[j], *args)
+
+    # Fill in lower triangle
+    simMat = simMat + simMat.T
+
+    # Fill in diagonal
+    for i in range(reps.shape[0]):
+        simMat[i, i] = 1.0
+
+    return simMat
+
+
+@nb.jit(nopython=True, parallel=True, fastmath=True)
+def calculate_sim_mat_numba(reps, simFun, *args):
+    """
+    Return a similarity matrix between each representation in reps using simFun.
+    """
+    # Preallocate similarity matrix
+    simMat = np.zeros((reps.shape[0], reps.shape[0]), dtype=np.float32)
+
+    # Loop through representations
+    for i in nb.prange(reps.shape[0]):
+        # Loop through other representations
+        for j in nb.prange(i + 1, reps.shape[0]):
+            # Calculate similarity
+            simMat[i, j] = simFun(reps[i], reps[j], *args)
+
+    # Fill in lower triangle
+    simMat = simMat + simMat.T
+
+    # Fill in diagonal
+    for i in nb.prange(reps.shape[0]):
+        simMat[i, i] = 1.0
+
+    return simMat
+
+
 if __name__ == "__main__":
-    df = build_df_from_dir("./images/deepCats/test")
-    # Save df
-    df.to_csv("./deepCatsTestImages.csv", index=False)
+    import time
+
+    # Create test reps
+    reps = np.random.normal(loc=0, scale=1, size=(800, 10000))
+
+    # Calculate similarity
+    print(calculate_sim_mat_numba(reps, gcm_sim_numba))
+
+    # Time
+    start = time.time()
+    calculate_sim_mat(reps, gcm_sim)
+    print(time.time() - start)
+
+    start = time.time()
+    calculate_sim_mat_numba(reps, gcm_sim_numba)
+    print(time.time() - start)
