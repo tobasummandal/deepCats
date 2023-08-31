@@ -185,7 +185,9 @@ def get_reps_over_training(modelDir: str, layer: str, images: np.ndarray):
     return reps
 
 
-def compute_sims_over_training(modelDir: str, layer: str, images: np.ndarray):
+def compute_sims_over_training(
+    modelDir: str, layer: str, images: np.ndarray, custom_objects: dict = None
+):
     """
     Return a similarity matrix over training from modelDir at layer using images.
     """
@@ -199,7 +201,7 @@ def compute_sims_over_training(modelDir: str, layer: str, images: np.ndarray):
     # Loop through models
     for i, modelFile in enumerate(modelFiles):
         # Load model
-        model = tf.keras.models.load_model(modelFile)
+        model = tf.keras.models.load_model(modelFile, custom_objects=custom_objects)
 
         # Get output at target layer
         x = model.get_layer(layer).output
@@ -213,7 +215,9 @@ def compute_sims_over_training(modelDir: str, layer: str, images: np.ndarray):
         # Flatten reps
         reps = reps.reshape(reps.shape[0], -1)
 
-        # Calculate similarity matrix
+        # Calculate similarity matrix using GCM (note that we're using the parameters r=2, c=1, p=1)
+        # simMat[i] = np.exp(-1*squareform(pdist(reps, metric="euclidean")))
+
         simMat[i] = squareform(pdist(reps, metric=cat.gcm_sim))
 
         # Cleanup so we don't run out of GPU memory
