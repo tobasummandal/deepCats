@@ -5,6 +5,7 @@ import tensorflow as tf
 import pandas as pd
 from itertools import combinations
 import numba as nb
+from scipy.spatial.distance import pdist, squareform
 
 
 # List folders
@@ -136,19 +137,6 @@ def get_images_from_cat(cats, preprocFun=None):
 
 
 def gcm_sim(rep1, rep2, r=2.0, c=1.0, p=1.0):
-    """
-    Return the GCM similarity between two representations with equal attention
-    weights.
-    """
-    weights = np.ones(rep1.shape[0]) / rep1.shape[0]
-
-    dist = np.sum(weights * (np.abs(rep1 - rep2) ** r)) ** (1.0 / r)
-
-    return np.exp(-c * dist**p)
-
-
-@nb.jit(nopython=True, parallel=True, fastmath=True)
-def gcm_sim_numba(rep1, rep2, r=2.0, c=1.0, p=1.0):
     """
     Return the GCM similarity between two representations with equal attention
     weights.
@@ -488,6 +476,92 @@ def simulate_cat_verification(
     return performance
 
 
+def cat_verification_from_mat(
+    simMat: np.ndarray,
+    imgInfo: pd.DataFrame,
+    modelName: str,
+    criterion: float,
+    maxImgs: int = None,
+) -> pd.DataFrame:
+    """
+    Simulate a category verification task given a similarity matrix with image
+    info using an LBA with a criterion.
+    """
+    # Find the unique categories at each level
+    levelCats = {
+        "super": list(np.unique(imgInfo["super"].dropna())),
+        "basic": list(np.unique(imgInfo["basic"].dropna())),
+        "sub": list(np.unique(imgInfo["sub"].dropna())),
+    }
+
+    # Make the index a column
+    imgInfo = imgInfo.reset_index()
+
+    # Setup dataframe
+    performance = pd.DataFrame(
+        columns=[
+            "model",
+            "image",
+            "category",
+            "level",
+            "response",
+            "RT",
+            "crit",
+            "maxImgs",
+        ]
+    )
+
+    # Loop through the levels
+    for level in ["super", "basic", "sub"]:
+        # Loop through categories in that level
+        for category in levelCats[level]:
+            # Get the indices of the images in the training set and test set
+            trainIdxs = imgInfo[
+                (imgInfo[level] == category) & (imgInfo["set"] == "train")
+            ].index
+            testIdxs = imgInfo[
+                (imgInfo[level] == category) & (imgInfo["set"] == "test")
+            ].index
+
+            # Filter similarity matrix for only the images we need
+            catSimMat = simMat[testIdxs, :][:, trainIdxs]
+
+            # Loop through the test images
+            for i, imgSims in enumerate(catSimMat):
+                # Randomly select exemplars if needed
+                if maxImgs is not None:
+                    imgSims = np.random.choice(imgSims, maxImgs, False)
+
+                evidence = np.sum(imgSims)
+
+                # Calculate drift
+                drift = evidence / (evidence + criterion)
+                resp, rt = LBA_deterministic(drift, 1 - drift, b=0.5)
+                resp = "yes" if resp == 1 else "no"
+
+                # Add performance to dataframe
+                performance = pd.concat(
+                    [
+                        performance,
+                        pd.DataFrame(
+                            {
+                                "model": modelName,
+                                "image": imgInfo.loc[testIdxs[i], "name"],
+                                "category": category,
+                                "level": level,
+                                "response": resp,
+                                "RT": rt,
+                                "crit": criterion,
+                                "maxImgs": maxImgs,
+                            },
+                            index=[0],
+                        ),
+                    ]
+                )
+
+    return performance
+
+
 def cluster_index(imgInfo, levelCol, category, imgSet, simMat, normalize=False):
     loc = (imgInfo[levelCol] == category) & (imgInfo["set"] == imgSet)
     withinIdxs = imgInfo.loc[loc, "name"].index
@@ -514,69 +588,20 @@ def cluster_index(imgInfo, levelCol, category, imgSet, simMat, normalize=False):
     return (withinSum / withinCount) - (betweenSum / betweenCount)
 
 
-def calculate_sim_mat(reps, simFun, *args):
+def default_gcm_sim_mat(reps):
     """
-    Return a similarity matrix between each representation in reps using simFun.
+    Calculate a similarity matrix using GCM with r=2, c=1, p=1.
     """
-    # Preallocate similarity matrix
-    simMat = np.zeros([reps.shape[0], reps.shape[0]], dtype=np.float32)
-
-    # Loop through representations
-    for i in range(reps.shape[0]):
-        # Loop through other representations
-        for j in range(i + 1, reps.shape[0]):
-            # Calculate similarity
-            simMat[i, j] = simFun(reps[i], reps[j], *args)
-
-    # Fill in lower triangle
-    simMat = simMat + simMat.T
-
-    # Fill in diagonal
-    for i in range(reps.shape[0]):
-        simMat[i, i] = 1.0
-
-    return simMat
-
-
-@nb.jit(nopython=True, parallel=True, fastmath=True)
-def calculate_sim_mat_numba(reps, simFun, *args):
-    """
-    Return a similarity matrix between each representation in reps using simFun.
-    """
-    # Preallocate similarity matrix
-    simMat = np.zeros((reps.shape[0], reps.shape[0]), dtype=np.float32)
-
-    # Loop through representations
-    for i in nb.prange(reps.shape[0]):
-        # Loop through other representations
-        for j in nb.prange(i + 1, reps.shape[0]):
-            # Calculate similarity
-            simMat[i, j] = simFun(reps[i], reps[j], *args)
-
-    # Fill in lower triangle
-    simMat = simMat + simMat.T
-
-    # Fill in diagonal
-    for i in nb.prange(reps.shape[0]):
-        simMat[i, i] = 1.0
-
-    return simMat
+    return np.exp(
+        -1
+        * squareform(pdist(reps, metric="euclidean"))
+        * ((1 / reps.shape[1]) ** (1 / 2))
+    )
 
 
 if __name__ == "__main__":
     import time
+    from scipy.spatial.distance import pdist, squareform
 
     # Create test reps
     reps = np.random.normal(loc=0, scale=1, size=(800, 10000))
-
-    # Calculate similarity
-    print(calculate_sim_mat_numba(reps, gcm_sim_numba))
-
-    # Time
-    start = time.time()
-    calculate_sim_mat(reps, gcm_sim)
-    print(time.time() - start)
-
-    start = time.time()
-    calculate_sim_mat_numba(reps, gcm_sim_numba)
-    print(time.time() - start)
