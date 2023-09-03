@@ -645,6 +645,52 @@ def train_branch_model(
     return fit
 
 
+def train_control_model(
+    model,
+    trainDs,
+    valDs,
+    lr,
+    epochs,
+    basic_weights=None,
+    thaw_layers=["fc7", "fc8"],
+    callbacks=[],
+):
+    """
+    Train a model for a few extra epochs without any manipulations to the
+    original model.
+    """
+    # Freeze all layers
+    for layer in model.layers:
+        layer.trainable = False
+
+    # Thaw layers
+    for layer in thaw_layers:
+        model.get_layer(layer).trainable = True
+
+    if basic_weights is None:
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(lr=lr, epsilon=0.1),
+            loss=tf.keras.loss.CategoricalCrossentropy(),
+            metrics=["accuracy", "top_k_categorical_accuracy"],
+        )
+    else:
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=lr, epsilon=0.1),
+            loss=weighted_cce(basic_weights),
+            metrics=["accuracy", "top_k_categorical_accuracy"],
+        )
+
+    # Train model
+    fit = model.fit(
+        trainDs,
+        epochs=epochs,
+        validation_data=valDs,
+        callbacks=callbacks,
+    )
+
+    return fit
+
+
 class TwoHotBirdAccuracy(tf.keras.metrics.Metric):
     def __init__(self, top_k=1, name="bird_accuracy", **kwargs):
         super(TwoHotBirdAccuracy, self).__init__(name=name, **kwargs)
@@ -745,7 +791,7 @@ if __name__ == "__main__":
         "--script",
         type=str,
         help="type of model to train",
-        choices=["ecoCubAmnesia", "twoHot", "branch"],
+        choices=["ecoCubAmnesia", "twoHot", "branch", "control"],
     )
     parser.add_argument(
         "--seed",
@@ -1044,7 +1090,50 @@ if __name__ == "__main__":
                 callbacks=[checkpoint, csvLogger, schedule],
                 loss_weights=loss_weight,
             )
+    elif args.script == "control":
+        dataDir = args.dataDir
 
+        # Create dataset
+        trainDs, weights = create_flat_dataset(
+            os.path.join(dataDir, "ecoset", "train"), size=224
+        )
+        valDs, _ = create_flat_dataset(
+            os.path.join(dataDir, "ecoset", "val"),
+            size=224,
+        )
+
+        weightPath = f"./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_{seed:02}/model.ckpt_epoch89"
+        model = ecoset.make_alex_net_v2(
+            weights_path=weightPath,
+            softmax=True,
+            input_shape=(224, 224, 3),
+        )
+
+        # Make callbacks
+        checkpoint = tf.keras.callbacks.ModelCheckpoint(
+            f"./models/deepCats/AlexNet/control/seed{seed:02}/epoch{{epoch:02d}}-val_loss{{val_loss:.2f}}.hdf5",
+            monitor="val_loss",
+            save_freq="epoch",
+        )
+
+        hyperParams = (
+            f"-lr{args.learningRate}"
+            f"-decay{args.lrDecay}"
+            f"{'-new_weights' if args.new_weights else ''}"
+        )
+        loggingFile = f"./models/deepCats/AlexNet/control/seed{seed:02}/training{hyperParams}.csv"
+        print("Logging to ", loggingFile)
+        csvLogger = tf.keras.callbacks.CSVLogger(
+            loggingFile,
+            append=True,
+        )
+
+        def exp_schedule(epoch):
+            lr = args.learningRate
+            return lr * tf.math.pow(args.lrDecay, epoch)
+
+        schedule = tf.keras.callbacks.LearningRateScheduler(exp_schedule, verbose=1)
+        callbacks = [checkpoint, csvLogger, schedule]
     else:  # Main script
         # tf.config.run_functions_eagerly(True)
         # tf.data.experimental.enable_debug_mode()
