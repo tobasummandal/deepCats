@@ -200,6 +200,8 @@ def compute_sims_over_training(
 
     # Loop through models
     for i, modelFile in enumerate(modelFiles):
+        print(f"Processing file: {modelFile}")
+
         # Load model
         model = tf.keras.models.load_model(modelFile, custom_objects=custom_objects)
 
@@ -216,9 +218,11 @@ def compute_sims_over_training(
         reps = reps.reshape(reps.shape[0], -1)
 
         # Calculate similarity matrix using GCM (note that we're using the parameters r=2, c=1, p=1)
-        # simMat[i] = np.exp(-1*squareform(pdist(reps, metric="euclidean")))
-
-        simMat[i] = squareform(pdist(reps, metric=cat.gcm_sim))
+        simMat[i] = np.exp(
+            -1
+            * squareform(pdist(reps, metric="euclidean"))
+            * ((1 / reps.shape[1]) ** (1 / 2))
+        )
 
         # Cleanup so we don't run out of GPU memory
         del model
