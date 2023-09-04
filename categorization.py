@@ -562,30 +562,91 @@ def cat_verification_from_mat(
     return performance
 
 
-def cluster_index(imgInfo, levelCol, category, imgSet, simMat, normalize=False):
-    loc = (imgInfo[levelCol] == category) & (imgInfo["set"] == imgSet)
-    withinIdxs = imgInfo.loc[loc, "name"].index
+class SimCluster:
+    def __init__(self, simMat, imgInfo):
+        self.simMat = simMat
+        self.imgInfo = imgInfo
 
-    loc = (imgInfo[levelCol] != category) & (imgInfo["set"] == imgSet)
-    betweenIdxs = imgInfo.loc[loc, "name"].index
+        # Figure out level map from imgInfo
+        self.levelMap = {
+            "super": list(imgInfo["super"].dropna().unique()),
+            "basic": list(imgInfo["basic"].dropna().unique()),
+            "sub": list(imgInfo["sub"].dropna().unique()),
+        }
 
-    if normalize:
-        simMat = simMat / np.max(simMat)
+        # Figure out sets
+        self.sets = list(imgInfo["set"].unique())
 
-    withinSum = 0
-    withinCount = 0
-    for i, j in combinations(withinIdxs, 2):
-        withinSum += simMat[i, j]
-        withinCount += 1
+    def calculate_index(self, sets=None, level=None, category=None):
+        # Both level and category cannot be set together
+        if level is not None and category is not None:
+            raise ValueError("Both level and category cannot be set together")
 
-    betweenSum = 0
-    betweenCount = 0
-    for i in withinIdxs:
-        for j in betweenIdxs:
-            betweenSum += simMat[i, j]
-            betweenCount += 1
+        if sets is not None:
+            # Filter imgInfo by sets
+            imgInfo = self.imgInfo[self.imgInfo["set"].isin(sets)]
+        else:
+            imgInfo = self.imgInfo
 
-    return (withinSum / withinCount) - (betweenSum / betweenCount)
+        # Handle average level indices first
+        if level is not None:
+            # Get categories
+            categories = self.levelMap[level]
+
+            # Preallocate array for cluster indices
+            clusters = np.zeros(len(categories), dtype=np.float32)
+            # Loop through categories
+            for k, cat in enumerate(categories):
+                loc = imgInfo[level] == cat
+                withinIdxs = imgInfo.loc[loc, "name"].index
+
+                loc = imgInfo[level] != cat
+                betweenIdxs = imgInfo.loc[loc, "name"].index
+
+                withinSum = 0
+                withinCount = 0
+                for i, j in combinations(withinIdxs, 2):
+                    withinSum += self.simMat[i, j]
+                    withinCount += 1
+
+                betweenSum = 0
+                betweenCount = 0
+                for i in withinIdxs:
+                    for j in betweenIdxs:
+                        betweenSum += self.simMat[i, j]
+                        betweenCount += 1
+
+                clusters[k] = (withinSum / withinCount) - (betweenSum / betweenCount)
+
+            return np.mean(clusters)
+        elif category is not None:
+            # Find the level of the category
+            for level, categories in self.levelMap.items():
+                if category in categories:
+                    break
+
+            loc = imgInfo[level] == category
+            withinIdxs = imgInfo.loc[loc, "name"].index
+
+            loc = imgInfo[level] != category
+            betweenIdxs = imgInfo.loc[loc, "name"].index
+
+            withinSum = 0
+            withinCount = 0
+            for i, j in combinations(withinIdxs, 2):
+                withinSum += self.simMat[i, j]
+                withinCount += 1
+
+            betweenSum = 0
+            betweenCount = 0
+            for i in withinIdxs:
+                for j in betweenIdxs:
+                    betweenSum += self.simMat[i, j]
+                    betweenCount += 1
+
+            return (withinSum / withinCount) - (betweenSum / betweenCount)
+        else:
+            raise ValueError("Either level or category must be set")
 
 
 def default_gcm_sim_mat(reps):
