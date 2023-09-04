@@ -652,9 +652,8 @@ class SimCluster:
         for imgSet in self.sets:
             for level in self.levelMap.keys():
                 for category in self.levelMap[level]:
-                    print(f"Calculating {imgSet} {level} {category}")
-                    print(self.calculate_index(sets=[imgSet], category=category))
-                    print("-")
+                    val = self.calculate_index(sets=[imgSet], category=category)
+                    print(f"{imgSet}-{level}-{category}: {val}")
             print("--")
 
 
