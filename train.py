@@ -1134,6 +1134,18 @@ if __name__ == "__main__":
 
         schedule = tf.keras.callbacks.LearningRateScheduler(exp_schedule, verbose=1)
         callbacks = [checkpoint, csvLogger, schedule]
+
+        # Train model
+        fit = train_control_model(
+            model=model,
+            trainDs=trainDs,
+            valDs=valDs,
+            lr=args.learningRate,
+            epochs=args.epochs,
+            callbacks=callbacks,
+            thaw_layers=args.thaw_layers,
+            basic_weights=weights,
+        )
     else:  # Main script
         # tf.config.run_functions_eagerly(True)
         # tf.data.experimental.enable_debug_mode()
