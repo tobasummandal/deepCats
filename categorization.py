@@ -648,6 +648,15 @@ class SimCluster:
         else:
             raise ValueError("Either level or category must be set")
 
+    def calculate_all(self):
+        for imgSet in self.sets:
+            for level in self.levelMap.keys():
+                for category in self.levelMap[level]:
+                    print(f"Calculating {imgSet} {level} {category}")
+                    print(self.calculate_index(sets=[imgSet], category=category))
+                    print("-")
+            print("--")
+
 
 def default_gcm_sim_mat(reps):
     """
