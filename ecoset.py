@@ -29,6 +29,7 @@ def make_alex_net_v2(
             padding="valid",
             activation="relu",
             name="conv1",
+            kernel_regularizer=tf.keras.regularizers.l2(0.0005),
         )(x)
     else:
         x = layers.Conv2D(
@@ -37,6 +38,7 @@ def make_alex_net_v2(
             strides=(4, 4),
             padding="valid",
             activation="relu",
+            kernel_regularizer=tf.keras.regularizers.l2(0.0005),
             name="conv1",
         )(inputs)
 
@@ -47,6 +49,7 @@ def make_alex_net_v2(
         (5, 5),
         padding="same",
         activation="relu",
+        kernel_regularizer=tf.keras.regularizers.l2(0.0005),
         name="conv2",
     )(x)
     x = layers.MaxPool2D(
@@ -60,6 +63,7 @@ def make_alex_net_v2(
         (3, 3),
         padding="same",
         activation="relu",
+        kernel_regularizer=tf.keras.regularizers.l2(0.0005),
         name="conv3",
     )(x)
     x = layers.Conv2D(
@@ -67,6 +71,7 @@ def make_alex_net_v2(
         (3, 3),
         padding="same",
         activation="relu",
+        kernel_regularizer=tf.keras.regularizers.l2(0.0005),
         name="conv4",
     )(x)
     x = layers.Conv2D(
@@ -74,6 +79,7 @@ def make_alex_net_v2(
         (3, 3),
         padding="same",
         activation="relu",
+        kernel_regularizer=tf.keras.regularizers.l2(0.0005),
         name="conv5",
     )(x)
     x = layers.MaxPool2D(
@@ -87,6 +93,7 @@ def make_alex_net_v2(
         (5, 5),
         padding="same",
         activation="relu",
+        kernel_regularizer=tf.keras.regularizers.l2(0.0005),
         name="fc6",
     )(x)
     x = layers.Dropout(0.5)(x)
@@ -96,6 +103,7 @@ def make_alex_net_v2(
         (1, 1),
         padding="same",
         activation="relu",
+        kernel_regularizer=tf.keras.regularizers.l2(0.0005),
         name="fc7",
     )(x)
     x = layers.Dropout(0.5)(x)
@@ -105,6 +113,7 @@ def make_alex_net_v2(
         (1, 1),
         padding="same",
         activation=None,
+        kernel_regularizer=tf.keras.regularizers.l2(0.0005),
         name="fc8",
     )(x)
     x = layers.GlobalAveragePooling2D()(x)
