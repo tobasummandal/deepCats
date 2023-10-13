@@ -4,8 +4,8 @@ import numpy as np
 import tensorflow as tf
 import pandas as pd
 from itertools import combinations
-import numba as nb
 from scipy.spatial.distance import pdist, squareform
+from scipy import stats
 
 
 # List folders
@@ -146,6 +146,21 @@ def gcm_sim(rep1, rep2, r=2.0, c=1.0, p=1.0):
     dist = np.sum(weights * (np.abs(rep1 - rep2) ** r)) ** (1.0 / r)
 
     return np.exp(-c * dist**p)
+
+
+def gcm_sim_thresholded(rep1, rep2, r=2.0, c=1.0, p=1.0, threshold=1):
+    """
+    Return the GCM similarity between two representations with equal attention
+    but only calculate the distance between features that are above threshold.
+    """
+    # Figure out which features are above threshold
+    rep1Thresh = rep1 > threshold
+    rep2Thresh = rep2 > threshold
+
+    rep1Threshed = rep1[rep1Thresh | rep2Thresh]
+    rep2Threshed = rep2[rep1Thresh | rep2Thresh]
+
+    return gcm_sim(rep1Threshed, rep2Threshed, r=r, c=c, p=p)
 
 
 def prod_sim(rep1, rep2):
@@ -577,14 +592,16 @@ class SimCluster:
         # Figure out sets
         self.sets = list(imgInfo["set"].unique())
 
-    def calculate_index(self, sets=None, level=None, category=None):
+    def calculate_index(
+        self, imgSet=None, level=None, category=None, within_level=False
+    ):
         # Both level and category cannot be set together
         if level is not None and category is not None:
             raise ValueError("Both level and category cannot be set together")
 
-        if sets is not None:
+        if imgSet is not None:
             # Filter imgInfo by sets
-            imgInfo = self.imgInfo[self.imgInfo["set"].isin(sets)]
+            imgInfo = self.imgInfo[self.imgInfo["set"] == imgSet]
         else:
             imgInfo = self.imgInfo
 
@@ -600,8 +617,18 @@ class SimCluster:
                 loc = imgInfo[level] == cat
                 withinIdxs = imgInfo.loc[loc, "name"].index
 
-                loc = imgInfo[level] != cat
-                betweenIdxs = imgInfo.loc[loc, "name"].index
+                if within_level and level != "super":
+                    hier = list(self.levelMap.keys())
+                    higherLevel = hier[hier.index(level) - 1]
+
+                    # Get the higher level category
+                    higherCat = imgInfo.loc[withinIdxs, higherLevel].unique()[0]
+
+                    loc = (imgInfo[level] != cat) & (imgInfo[higherLevel] == higherCat)
+                    betweenIdxs = imgInfo.loc[loc, "name"].index
+                else:
+                    loc = imgInfo[level] != cat
+                    betweenIdxs = imgInfo.loc[loc, "name"].index
 
                 withinSum = 0
                 withinCount = 0
@@ -628,8 +655,18 @@ class SimCluster:
             loc = imgInfo[level] == category
             withinIdxs = imgInfo.loc[loc, "name"].index
 
-            loc = imgInfo[level] != category
-            betweenIdxs = imgInfo.loc[loc, "name"].index
+            if within_level and level != "super":
+                hier = list(self.levelMap.keys())
+                higherLevel = hier[hier.index(level) - 1]
+
+                # Get the higher level category
+                higherCat = imgInfo.loc[withinIdxs, higherLevel].unique()[0]
+
+                loc = (imgInfo[level] != category) & (imgInfo[higherLevel] == higherCat)
+                betweenIdxs = imgInfo.loc[loc, "name"].index
+            else:
+                loc = imgInfo[level] != category
+                betweenIdxs = imgInfo.loc[loc, "name"].index
 
             withinSum = 0
             withinCount = 0
@@ -648,11 +685,13 @@ class SimCluster:
         else:
             raise ValueError("Either level or category must be set")
 
-    def calculate_all(self):
+    def calculate_all(self, within_level=False):
         for imgSet in self.sets:
             for level in self.levelMap.keys():
                 for category in self.levelMap[level]:
-                    val = self.calculate_index(sets=[imgSet], category=category)
+                    val = self.calculate_index(
+                        imgSet=imgSet, category=category, within_level=within_level
+                    )
                     print(f"{imgSet}-{level}-{category}: {val}")
             print("--")
 
@@ -668,9 +707,61 @@ def default_gcm_sim_mat(reps):
     )
 
 
-if __name__ == "__main__":
-    import time
-    from scipy.spatial.distance import pdist, squareform
+def make_categories(catCov, super_rad, basic_rad, sub_rad, nFeatures, nImages):
+    def _centroids_maker(center, r):
+        """
+        Create two centroids on a surface of a hypersphere with radius r. The
+        first centroid is randomly selected from the surface of a n-sphere
+        """
+        nFeatures = center.shape[0]
 
-    # Create test reps
-    reps = np.random.normal(loc=0, scale=1, size=(800, 10000))
+        coords = stats.multivariate_normal.rvs(mean=np.zeros((nFeatures,)), cov=1)
+
+        # Change coordinates to unit length
+        coords = coords / np.linalg.norm(coords)
+
+        # Multiply coords by radius of sphere
+        coords = coords * r
+
+        # Return coordinates plus and minus center
+        return center + coords, center - coords
+
+    # Make superordinate centroids
+    superCentroids = _centroids_maker(
+        center=np.zeros((nFeatures,), dtype=np.float32), r=super_rad
+    )
+
+    # Make basic centroids
+    basicCentroids = np.zeros((4, nFeatures), dtype=np.float32)
+    for i, center in enumerate(superCentroids):
+        basicCentroids[(i * 2) : (i * 2 + 2)] = _centroids_maker(
+            center=center, r=basic_rad
+        )
+
+    # Make subordinate centroids
+    subCentroids = np.zeros((8, nFeatures), dtype=np.float32)
+    for i, center in enumerate(basicCentroids):
+        subCentroids[(i * 2) : (i * 2 + 2)] = _centroids_maker(center=center, r=sub_rad)
+
+    # Generate exemplars
+    subExemplars = np.zeros((nImages * 8, nFeatures), dtype=np.float32)
+    for i, center in enumerate(subCentroids):
+        subExemplars[
+            (i * nImages) : (i * nImages + nImages)
+        ] = stats.multivariate_normal.rvs(mean=center, cov=catCov, size=nImages)
+
+    return subExemplars, subCentroids
+
+
+if __name__ == "__main__":
+    reps = simulate_reps(
+        nImgs=2,
+        nFeatures=32,
+        theta=0.25,
+        p_sub=0.5,
+        p_basic=0.5,
+        p_super=0.5,
+    )
+
+    simMat = default_gcm_sim_mat(reps)
+    print(simMat)
