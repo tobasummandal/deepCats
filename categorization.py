@@ -707,7 +707,30 @@ def default_gcm_sim_mat(reps):
     )
 
 
-def make_categories(catCov, super_rad, basic_rad, sub_rad, nFeatures, nImages):
+def exemplar_maker(n, center, scale=None, radius=None):
+    # Check if either scale xor radius is defined
+    if scale is None and radius is None:
+        raise ValueError("Either scale xor radius must be defined")
+    elif scale is not None and radius is not None:
+        raise ValueError("Only one of scale or radius can be defined")
+
+    nDims = len(center)
+
+    # Generate random numbers as needed
+    uniforms = np.random.uniform(low=0, high=1, size=n) ** (1 / nDims)
+    coords = np.random.normal(loc=0, scale=1, size=(n, nDims))
+    radii = np.abs(np.random.normal(loc=0, scale=scale, size=n)) if scale else radius
+
+    coords = coords.T / np.linalg.norm(coords, axis=1)
+    coords = coords * uniforms * radii
+    coords = coords.T + center
+
+    return coords
+
+
+def make_categories(
+    *, catScale=None, catRadius=None, super_rad, basic_rad, sub_rad, nFeatures, nImages
+):
     def _centroids_maker(center, r):
         """
         Create two centroids on a surface of a hypersphere with radius r. The
@@ -746,9 +769,9 @@ def make_categories(catCov, super_rad, basic_rad, sub_rad, nFeatures, nImages):
     # Generate exemplars
     subExemplars = np.zeros((nImages * 8, nFeatures), dtype=np.float32)
     for i, center in enumerate(subCentroids):
-        subExemplars[
-            (i * nImages) : (i * nImages + nImages)
-        ] = stats.multivariate_normal.rvs(mean=center, cov=catCov, size=nImages)
+        subExemplars[(i * nImages) : (i * nImages + nImages)] = exemplar_maker(
+            nImages, center=center, scale=catScale, radius=catRadius
+        )
 
     return subExemplars, subCentroids
 
