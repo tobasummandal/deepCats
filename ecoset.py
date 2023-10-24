@@ -11,6 +11,7 @@ def make_alex_net_v2(
     output_shape=565,
     weights_path=None,
     softmax=False,
+    l2_reg=True,
     augment=False,
 ):
     inputs = tf.keras.Input(shape=input_shape)
@@ -29,7 +30,7 @@ def make_alex_net_v2(
             padding="valid",
             activation="relu",
             name="conv1",
-            kernel_regularizer=tf.keras.regularizers.l2(0.0005),
+            kernel_regularizer=tf.keras.regularizers.l2(0.0005) if l2_reg else None,
         )(x)
     else:
         x = layers.Conv2D(
@@ -38,7 +39,7 @@ def make_alex_net_v2(
             strides=(4, 4),
             padding="valid",
             activation="relu",
-            kernel_regularizer=tf.keras.regularizers.l2(0.0005),
+            kernel_regularizer=tf.keras.regularizers.l2(0.0005) if l2_reg else None,
             name="conv1",
         )(inputs)
 
@@ -49,7 +50,7 @@ def make_alex_net_v2(
         (5, 5),
         padding="same",
         activation="relu",
-        kernel_regularizer=tf.keras.regularizers.l2(0.0005),
+        kernel_regularizer=tf.keras.regularizers.l2(0.0005) if l2_reg else None,
         name="conv2",
     )(x)
     x = layers.MaxPool2D(
@@ -63,7 +64,7 @@ def make_alex_net_v2(
         (3, 3),
         padding="same",
         activation="relu",
-        kernel_regularizer=tf.keras.regularizers.l2(0.0005),
+        kernel_regularizer=tf.keras.regularizers.l2(0.0005) if l2_reg else None,
         name="conv3",
     )(x)
     x = layers.Conv2D(
@@ -71,7 +72,7 @@ def make_alex_net_v2(
         (3, 3),
         padding="same",
         activation="relu",
-        kernel_regularizer=tf.keras.regularizers.l2(0.0005),
+        kernel_regularizer=tf.keras.regularizers.l2(0.0005) if l2_reg else None,
         name="conv4",
     )(x)
     x = layers.Conv2D(
@@ -79,7 +80,7 @@ def make_alex_net_v2(
         (3, 3),
         padding="same",
         activation="relu",
-        kernel_regularizer=tf.keras.regularizers.l2(0.0005),
+        kernel_regularizer=tf.keras.regularizers.l2(0.0005) if l2_reg else None,
         name="conv5",
     )(x)
     x = layers.MaxPool2D(
@@ -93,7 +94,7 @@ def make_alex_net_v2(
         (5, 5),
         padding="same",
         activation="relu",
-        kernel_regularizer=tf.keras.regularizers.l2(0.0005),
+        kernel_regularizer=tf.keras.regularizers.l2(0.0005) if l2_reg else None,
         name="fc6",
     )(x)
     x = layers.Dropout(0.5)(x)
@@ -103,7 +104,7 @@ def make_alex_net_v2(
         (1, 1),
         padding="same",
         activation="relu",
-        kernel_regularizer=tf.keras.regularizers.l2(0.0005),
+        kernel_regularizer=tf.keras.regularizers.l2(0.0005) if l2_reg else None,
         name="fc7",
     )(x)
     x = layers.Dropout(0.5)(x)
@@ -113,7 +114,7 @@ def make_alex_net_v2(
         (1, 1),
         padding="same",
         activation=None,
-        kernel_regularizer=tf.keras.regularizers.l2(0.0005),
+        kernel_regularizer=tf.keras.regularizers.l2(0.0005) if l2_reg else None,
         name="fc8",
     )(x)
     x = layers.GlobalAveragePooling2D()(x)
