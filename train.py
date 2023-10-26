@@ -478,6 +478,7 @@ def train_twohot_model(
     lr,
     epochs,
     two_hots,
+    sub_layers=0,
     thaw_layers=["fc7", "fc8", "subFC"],
     softmax=True,
     l2_reg=True,
@@ -497,6 +498,19 @@ def train_twohot_model(
         x = tf.keras.layers.BatchNormalization()(x)
 
     weightInit = tf.keras.initializers.TruncatedNormal(stddev=0.005)
+
+    if sub_layers > 0:
+        # Add extra layers
+        for i in range(sub_layers):
+            x = tf.keras.layers.Conv2D(
+                4096,
+                (1, 1),
+                padding="same",
+                activation="relu",
+                kernel_regularizer=tf.keras.regularizers.l2(0.0005) if l2_reg else None,
+                name=f"sub{i}",
+            )(x)
+
     x = tf.keras.layers.Conv2D(
         subNodes,
         (1, 1),
@@ -889,6 +903,12 @@ if __name__ == "__main__":
         default=0.5,
     )
     parser.add_argument(
+        "--sub_layers",
+        type=int,
+        help="number of extra layers to add to the sub branch",
+        default=0,
+    )
+    parser.add_argument(
         "--gpu_id",
         type=str,
         help="which gpu to use",
@@ -1018,6 +1038,7 @@ if __name__ == "__main__":
                 f"{'-new_weights' if args.new_weights else ''}"
                 f"{'-softmax_labels' if args.softmax_labels else ''}"
                 f"{'-l2_reg' if args.l2_reg else ''}"
+                f"{'-sub_layers'+str(args.sub_layers) if args.sub_layers > 0 else ''}"
             )
             thawed = "-thaw"
             for layer in args.thaw_layers:
@@ -1045,6 +1066,7 @@ if __name__ == "__main__":
                 two_hots=twoHots,
                 class_weights=weights,
                 batch_norm=args.batchNorm,
+                sub_layers=args.sub_layers,
                 callbacks=callbacks,
                 thaw_layers=args.thaw_layers,
                 l2_reg=args.l2_reg,
@@ -1176,7 +1198,6 @@ if __name__ == "__main__":
             lr=args.learningRate,
             epochs=args.epochs,
             callbacks=callbacks,
-            l2_reg=args.l2_reg,
             thaw_layers=args.thaw_layers,
             basic_weights=weights,
         )
