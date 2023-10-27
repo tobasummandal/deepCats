@@ -4,8 +4,9 @@ import numpy as np
 import tensorflow as tf
 import pandas as pd
 from itertools import combinations
-from scipy.spatial.distance import pdist, squareform
+from scipy.spatial.distance import pdist, squareform, cdist
 from scipy import stats
+from treelib import Tree
 
 
 # List folders
@@ -774,6 +775,278 @@ def make_categories(
         )
 
     return subExemplars, subCentroids
+
+
+class diana:
+    def __init__(self, data, metric, max_clusters, verbose=False):
+        self.data = data
+        self.metric = metric
+        indices = np.arange(data.shape[0])
+        self.tree = Tree()
+        self.verbose = verbose
+
+        self.tree.create_node(
+            "root",
+            0,
+            data={
+                "objects": indices,
+            },
+        )
+
+        while len(self.tree.leaves()) < max_clusters:
+            if self.verbose:
+                print(
+                    f"We have {len(self.tree.leaves())} clusters, running diana step..."
+                )
+            # Pick cluster with largest diameter
+            nid = self.pick_cluster().identifier
+
+            # Split cluster
+            self.split_cluster(nid)
+
+    def _mean_diss(self, simMatrix):
+        return np.sum(simMatrix, axis=0) / (simMatrix.shape[0] - 1)
+
+    def split_cluster(self, nid):
+        node = self.tree.get_node(nid)
+
+        oldCluster = np.copy(node.data["objects"])
+        clusterSim = squareform(pdist(self.data[oldCluster,], metric=self.metric))
+
+        # Find the item that is most dissimilar to the rest of the cluster
+        mostDissIdx = np.argmax(self._mean_diss(clusterSim))
+        newCluster = oldCluster[mostDissIdx]
+
+        # Remove most dissimilar index from old cluster
+        oldCluster = np.delete(oldCluster, mostDissIdx)
+
+        while True:
+            # Compute dissimilarity of old cluster
+            oldDiss = squareform(pdist(self.data[oldCluster,], metric=self.metric))
+            oldDiss = self._mean_diss(oldDiss)
+
+            # Now compute similarity of each item in the old cluster with the new cluster
+            oldClusterData = self.data[oldCluster, :]
+            newClusterData = self.data[newCluster, :]
+
+            # if new cluster data is 1D, reshape to 2D
+            if len(newClusterData.shape) == 1:
+                newClusterData = newClusterData.reshape(1, -1)
+
+            newDiss = (
+                np.sum(
+                    cdist(oldClusterData, newClusterData, metric=self.metric),
+                    axis=1,
+                )
+                / newClusterData.shape[0]
+            )
+
+            # Find new item to remove from old cluster
+            dissDiff = oldDiss - newDiss
+            mostDissIdx = np.argmax(dissDiff)
+
+            # Check if most dissimilar item is more dissimilar than the new cluster
+            if dissDiff[mostDissIdx] < 0:
+                break
+
+            # Update clusters
+            newCluster = np.append(newCluster, oldCluster[mostDissIdx])
+            oldCluster = np.delete(oldCluster, mostDissIdx)
+
+        # Figure out level
+        level = self.tree.level(nid) + 1
+
+        # Figure out how many nodes are at this level
+        nodesAtLevel = len(
+            [
+                node
+                for node in self.tree.all_nodes()
+                if self.tree.level(node.identifier) == level
+            ]
+        )
+
+        # Figure out the highest nid
+        highestNid = np.max([node.identifier for node in self.tree.all_nodes()])
+
+        self.tree.create_node(
+            f"level{level}.{nodesAtLevel}",
+            highestNid + 1,
+            parent=nid,
+            data={
+                "objects": oldCluster,
+            },
+        )
+
+        # If new cluster is only 1 element, make it an array
+        if not isinstance(newCluster, np.ndarray):
+            newCluster = np.array([newCluster])
+
+        self.tree.create_node(
+            f"level{level}.{nodesAtLevel + 1}",
+            highestNid + 2,
+            parent=nid,
+            data={
+                "objects": newCluster,
+            },
+        )
+
+        if self.verbose:
+            print(
+                f"Split cluster {nid} into {highestNid + 1} and {highestNid + 2} at level {level}"
+            )
+            print(f"Cluster {highestNid + 1} has {len(oldCluster)} objects")
+            print(f"Cluster {highestNid + 2} has {len(newCluster)} objects")
+
+    def pick_cluster(self):
+        # Get every leaf
+        leaves = self.tree.leaves()
+
+        # Calculate diameter of each leaf
+        diameters = np.zeros(len(leaves))
+        for i, leaf in enumerate(leaves):
+            leafData = self.data[leaf.data["objects"], :]
+            diameters[i] = np.max(pdist(leafData, metric=self.metric))
+
+        # Pick the leaf with the largest diameter
+        return leaves[np.argmax(diameters)]
+
+    def linkage_matrix(self, calc_dist=False):
+        # Copy tree
+        tree = Tree(self.tree.subtree(self.tree.root), deep=True)
+
+        nData = self.data.shape[0]
+        # Start building linkage matrix
+        linkage = np.zeros((nData - 1, 4))
+        rowCount = 0
+
+        # Loop through leaves
+        for leaf in tree.leaves():
+            # Each leaf is its own cluster, so stick together every object into a bigger and bigger cluster
+            cluster = leaf.data["objects"]
+
+            # Calculate the average distance between objects in the cluster
+            if calc_dist:
+                clusterReps = self.data[cluster, :]
+                clusterDist = np.mean(pdist(clusterReps, metric=self.metric))
+            else:
+                clusterDist = 0.2
+
+            # Stick the first two items together into a new cluster
+            linkage[rowCount, 0] = cluster[0]
+            linkage[rowCount, 1] = cluster[1]
+            linkage[rowCount, 2] = clusterDist
+            linkage[rowCount, 3] = 2
+            rowCount += 1
+
+            # Loop through the remaining items and stick it to this cluster
+            for i in range(2, len(cluster)):
+                linkID = rowCount + nData - 1
+                linkage[rowCount, 0] = cluster[i]
+                linkage[rowCount, 1] = linkID
+                linkage[rowCount, 2] = clusterDist
+                linkage[rowCount, 3] = linkage[rowCount - 1, 3] + 1
+                rowCount += 1
+
+            # Remember the linkID for this leaf cluster
+            leaf.data["linkID"] = rowCount + nData - 1
+
+        # Now loop through the tree and build the rest of the linkage matrix
+        for i in range(len(tree.nodes) - 1, -1, -1):
+            if i == 0:
+                continue
+
+            # Get the node's parent
+            ancestor = tree.get_node(tree.ancestor(i))
+
+            # Only work on this node if the parent dooesn't have a linkID yet
+            if not "linkID" in ancestor.data:
+                # Get the node
+                node1 = tree.get_node(i)
+
+                # Get the node's sibling
+                node2 = tree.siblings(i)[0]
+
+                # Calculate the mean distance bewteen the objects in each node
+                if calc_dist:
+                    node1Reps = self.data[node1.data["objects"]]
+                    node2Reps = self.data[node2.data["objects"]]
+                    nodeDist = np.mean(cdist(node1Reps, node2Reps, self.metric))
+                else:
+                    nodeDist = tree.depth() - tree.level(i) + 1
+
+                # Add the new entry to linkage
+                linkID = rowCount + nData
+                linkage[rowCount, 0] = node1.data["linkID"]
+                linkage[rowCount, 1] = node2.data["linkID"]
+                linkage[rowCount, 2] = nodeDist
+                linkage[rowCount, 3] = len(ancestor.data["objects"])
+                rowCount += 1
+
+                # Save the linkID to the ancestor
+                ancestor.data["linkID"] = linkID
+
+        return linkage
+
+
+def get_nodes_at_level(tree, level):
+    """Return a list of nodes at a given level of the tree"""
+    return [
+        i.identifier for i in tree.all_nodes_itr() if tree.level(i.identifier) == level
+    ]
+
+
+def get_leaves_from_node(tree, node):
+    """Return the indices of the items (leaves) from a given node"""
+    leafList = [leaf.data["objects"] for leaf in tree.leaves(node)]
+    return np.concatenate(leafList)
+
+
+def external_evaluate_over_levels(tree, labels, metric, verbose=False):
+    levels = range(1, labels.shape[1] + 1)
+    nLeaves = len(tree.get_node(0).data["objects"])
+
+    scores = np.zeros(len(levels))
+    for i, level in enumerate(levels):
+        levelLabels = labels[:, level - 1]
+        nodes = get_nodes_at_level(tree, level)
+        levelPred = np.repeat(-1, nLeaves)
+        for j, node in enumerate(nodes):
+            leaves = get_leaves_from_node(tree, node)
+
+            levelPred[leaves] = j
+
+        # Calculate external metric
+        score = metric(levelLabels, levelPred)
+        scores[i] = score
+
+        if verbose:
+            print(f"Level {level}: {score}")
+
+    return scores
+
+
+def internal_evaluate_over_levels(tree, reps, metric, verbose=False):
+    maxLevel = max([tree.level(i.identifier) for i in tree.all_nodes_itr()]) + 1
+    levels = range(1, maxLevel)
+    nLeaves = len(tree.get_node(0).data["objects"])
+
+    scores = np.zeros(len(levels))
+    for i, level in enumerate(levels):
+        nodes = get_nodes_at_level(tree, level)
+        levelPred = np.repeat(-1, nLeaves)
+        for j, node in enumerate(nodes):
+            leaves = get_leaves_from_node(tree, node)
+
+            levelPred[leaves] = j
+
+        # Calculate internal metric
+        score = metric(reps, levelPred)
+        scores[i] = score
+
+        if verbose:
+            print(f"Level {level}: {score}")
+
+    return scores
 
 
 if __name__ == "__main__":
