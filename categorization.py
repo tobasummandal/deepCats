@@ -778,7 +778,7 @@ def make_categories(
 
 
 class diana:
-    def __init__(self, data, metric, max_clusters, verbose=False):
+    def __init__(self, data, metric, max_clusters=None, verbose=False):
         self.data = data
         self.metric = metric
         indices = np.arange(data.shape[0])
@@ -792,6 +792,9 @@ class diana:
                 "objects": indices,
             },
         )
+
+        if max_clusters is None:
+            max_clusters = data.shape[0]
 
         while len(self.tree.leaves()) < max_clusters:
             if self.verbose:
@@ -820,7 +823,7 @@ class diana:
         # Remove most dissimilar index from old cluster
         oldCluster = np.delete(oldCluster, mostDissIdx)
 
-        while True:
+        while len(oldCluster) > 1:
             # Compute dissimilarity of old cluster
             oldDiss = squareform(pdist(self.data[oldCluster,], metric=self.metric))
             oldDiss = self._mean_diss(oldDiss)
@@ -905,10 +908,23 @@ class diana:
         diameters = np.zeros(len(leaves))
         for i, leaf in enumerate(leaves):
             leafData = self.data[leaf.data["objects"], :]
-            diameters[i] = np.max(pdist(leafData, metric=self.metric))
+            if len(leafData) == 1:
+                diameters[i] = 0
+            else:
+                diameters[i] = np.max(pdist(leafData, metric=self.metric))
 
         # Pick the leaf with the largest diameter
         return leaves[np.argmax(diameters)]
+
+    def prune_tree(self, level):
+        level += 1
+        # Loop through all nodes and delete nodes just after the target level
+        for node in self.tree.all_nodes():
+            if (
+                self.tree.get_node(node.identifier) is not None
+                and self.tree.level(node.identifier) == level
+            ):
+                self.tree.remove_node(node.identifier)
 
     def linkage_matrix(self, calc_dist=False):
         # Copy tree
@@ -923,6 +939,11 @@ class diana:
         for leaf in tree.leaves():
             # Each leaf is its own cluster, so stick together every object into a bigger and bigger cluster
             cluster = leaf.data["objects"]
+
+            # If the cluster is only one object, just give it a nodeID of itself
+            if len(cluster) == 1:
+                leaf.data["linkID"] = cluster[0]
+                continue
 
             # Calculate the average distance between objects in the cluster
             if calc_dist:
@@ -955,16 +976,23 @@ class diana:
             if i == 0:
                 continue
 
+            # if tree.get_node(i) is None:
+            #     continue
+
             # Get the node's parent
             ancestor = tree.get_node(tree.ancestor(i))
 
-            # Only work on this node if the parent dooesn't have a linkID yet
+            # Only work on this node if the parent doesn't have a linkID yet
             if not "linkID" in ancestor.data:
                 # Get the node
                 node1 = tree.get_node(i)
 
                 # Get the node's sibling
                 node2 = tree.siblings(i)[0]
+
+                # # If sibling doesn't have link ID, skip this for now
+                # if not "linkID" in node2.data:
+                #     continue
 
                 # Calculate the mean distance bewteen the objects in each node
                 if calc_dist:
@@ -1050,14 +1078,16 @@ def internal_evaluate_over_levels(tree, reps, metric, verbose=False):
 
 
 if __name__ == "__main__":
-    reps = simulate_reps(
-        nImgs=2,
-        nFeatures=32,
-        theta=0.25,
-        p_sub=0.5,
-        p_basic=0.5,
-        p_super=0.5,
+    subExemplars, subCentroids = make_categories(
+        catRadius=2,
+        super_rad=1,
+        basic_rad=0.5,
+        sub_rad=0.25,
+        nFeatures=1024,
+        nImages=100,
     )
 
-    simMat = default_gcm_sim_mat(reps)
-    print(simMat)
+    subClusters = diana(subExemplars, "euclidean", prune=False, verbose=True)
+    subClusters.prune_tree(3)
+    linkage = subClusters.linkage_matrix()
+    linkage
