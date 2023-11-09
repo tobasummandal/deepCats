@@ -708,29 +708,49 @@ def default_gcm_sim_mat(reps):
     )
 
 
-def exemplar_maker(n, center, scale=None, radius=None):
-    # Check if either scale xor radius is defined
-    if scale is None and radius is None:
-        raise ValueError("Either scale xor radius must be defined")
-    elif scale is not None and radius is not None:
-        raise ValueError("Only one of scale or radius can be defined")
-
+def exemplar_maker(n, center, radius=1, radius_density="uniform", relu=False):
     nDims = len(center)
 
     # Generate random numbers as needed
-    uniforms = np.random.uniform(low=0, high=1, size=n) ** (1 / nDims)
     coords = np.random.normal(loc=0, scale=1, size=(n, nDims))
-    radii = np.abs(np.random.normal(loc=0, scale=scale, size=n)) if scale else radius
+    uniforms = np.random.uniform(low=0, high=1, size=n)
 
-    coords = coords.T / np.linalg.norm(coords, axis=1)
-    coords = coords * uniforms * radii
+    if radius_density == "power":
+        radii = (uniforms ** (1 / nDims)) * radius
+    elif radius_density == "normal":
+        radii = (
+            (uniforms ** (1 / nDims))
+            * np.abs(np.random.normal(loc=0, scale=1, size=n))
+            * radius
+        )
+    elif radius_density == "uniform":
+        radii = uniforms * radius
+    else:
+        raise ValueError("Density type not recognized")
+
+    coords = coords.T / np.linalg.norm(
+        coords, axis=1
+    )  # Uniformly distributed directions
+    coords = coords * radii  # Change radii
     coords = coords.T + center
+
+    # If relu, apply relu
+    if relu:
+        coords[coords < 0] = 0
 
     return coords
 
 
 def make_categories(
-    *, catScale=None, catRadius=None, super_rad, basic_rad, sub_rad, nFeatures, nImages
+    *,
+    cat_rad,
+    radius_density="power",
+    relu=False,
+    super_rad,
+    basic_rad,
+    sub_rad,
+    nFeatures,
+    nImages,
 ):
     def _centroids_maker(center, r):
         """
@@ -771,7 +791,11 @@ def make_categories(
     subExemplars = np.zeros((nImages * 8, nFeatures), dtype=np.float32)
     for i, center in enumerate(subCentroids):
         subExemplars[(i * nImages) : (i * nImages + nImages)] = exemplar_maker(
-            nImages, center=center, scale=catScale, radius=catRadius
+            nImages,
+            center=center,
+            radius=cat_rad,
+            radius_density=radius_density,
+            relu=relu,
         )
 
     return subExemplars, subCentroids
@@ -1053,8 +1077,11 @@ def external_evaluate_over_levels(tree, labels, metric, verbose=False):
     return scores
 
 
-def internal_evaluate_over_levels(tree, reps, metric, verbose=False):
-    maxLevel = max([tree.level(i.identifier) for i in tree.all_nodes_itr()]) + 1
+def internal_evaluate_over_levels(tree, reps, metric, level=None, verbose=False):
+    if level is None:
+        maxLevel = max([tree.level(i.identifier) for i in tree.all_nodes_itr()]) + 1
+    else:
+        maxLevel = level + 1
     levels = range(1, maxLevel)
     nLeaves = len(tree.get_node(0).data["objects"])
 
@@ -1078,16 +1105,38 @@ def internal_evaluate_over_levels(tree, reps, metric, verbose=False):
 
 
 if __name__ == "__main__":
-    subExemplars, subCentroids = make_categories(
-        catRadius=2,
-        super_rad=1,
-        basic_rad=0.5,
-        sub_rad=0.25,
-        nFeatures=1024,
-        nImages=100,
-    )
 
-    subClusters = diana(subExemplars, "euclidean", prune=False, verbose=True)
-    subClusters.prune_tree(3)
-    linkage = subClusters.linkage_matrix()
-    linkage
+    def cartesian_to_polar(coords):
+        """
+        Convert cartesian coordinates to polar coordinates
+        """
+        r = np.linalg.norm(coords)
+        thetas = np.zeros(len(coords) - 1)
+
+        for i in range(len(thetas)):
+            thetas[i] = np.arctan2(np.linalg.norm(coords[i + 1 :]), coords[i])
+
+        return r, thetas
+
+    def polar_to_cartesian(r, thetas):
+        """
+        Convert polar coordinates to cartesian coordinates
+        """
+        coords = np.zeros(len(thetas) + 1)
+
+        for i in range(len(thetas)):
+            coords[i] = r * np.prod(np.sin(thetas[:i])) * np.cos(thetas[i])
+
+        coords[-1] = r * np.prod(np.sin(thetas))
+
+        return coords
+
+    cartOrig = exemplar_maker(1, np.zeros((10,)), radius=1)
+
+    r, pol = cartesian_to_polar(cartOrig[0])
+    cartConvert = polar_to_cartesian(r, pol)
+
+    print(cartOrig)
+    print(r, pol)
+    print(cartConvert)
+    print(cartOrig - cartConvert)
