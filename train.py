@@ -961,11 +961,13 @@ if __name__ == "__main__":
             loggingFile,
             append=True,
         )
+        callbacks = [checkpoint, csvLogger]
 
-        schedule = tf.keras.callbacks.ReduceLROnPlateau(
-            monitor="val_loss", factor=args.lrDecay, patience=1, verbose=1
-        )
-        callbacks = [checkpoint, csvLogger, schedule]
+        if args.lrDecay < 1.0:
+            schedule = tf.keras.callbacks.ReduceLROnPlateau(
+                monitor="val_loss", factor=args.lrDecay, patience=1, verbose=1
+            )
+            callbacks.append(schedule)
 
         # Train model
         fit = train_ecocub_model(
@@ -1025,11 +1027,13 @@ if __name__ == "__main__":
             loggingFile = f"./models/deepCats/AlexNet/twoHot/seed{seed:02}/training-{hyperParams}.csv"
             print("Logging to ", loggingFile)
             csvLogger = tf.keras.callbacks.CSVLogger(loggingFile, append=True)
+            callbacks = [checkpoint, csvLogger]
 
-            schedule = tf.keras.callbacks.ReduceLROnPlateau(
-                monitor="val_loss", factor=args.lrDecay, patience=1, verbose=1
-            )
-            callbacks = [checkpoint, csvLogger, schedule]
+            if args.lrDecay < 1.0:
+                schedule = tf.keras.callbacks.ReduceLROnPlateau(
+                    monitor="val_loss", factor=args.lrDecay, patience=1, verbose=1
+                )
+                callbacks.append(schedule)
 
             # Train model
             fit = train_twohot_model(
@@ -1078,10 +1082,6 @@ if __name__ == "__main__":
                 save_freq="epoch",
             )
 
-            schedule = tf.keras.callbacks.ReduceLROnPlateau(
-                monitor="val_loss", factor=args.lrDecay, patience=1, verbose=1
-            )
-
             hyperParams = (
                 f"-lr{args.learningRate}"
                 f"-decay{args.lrDecay}"
@@ -1098,6 +1098,13 @@ if __name__ == "__main__":
             loggingFile = f"./models/deepCats/AlexNet/branch/seed{seed:02}/training-{hyperParams}.csv"
             print("Logging to ", loggingFile)
             csvLogger = tf.keras.callbacks.CSVLogger(loggingFile, append=True)
+            callbacks = [checkpoint, csvLogger]
+
+            if args.lrDecay < 1.0:
+                schedule = tf.keras.callbacks.ReduceLROnPlateau(
+                    monitor="val_loss", factor=args.lrDecay, patience=1, verbose=1
+                )
+                callbacks.append(schedule)
 
             loss_weight = [1 - args.sub_loss_weight, args.sub_loss_weight]
             fit = train_branch_model(
@@ -1111,7 +1118,7 @@ if __name__ == "__main__":
                 epochs=args.epochs,
                 l2_reg=args.l2_reg,
                 non_bird_node=args.activation != "zero_hot",
-                callbacks=[checkpoint, csvLogger, schedule],
+                callbacks=callbacks,
                 loss_weights=loss_weight,
             )
     elif args.script == "control":
@@ -1153,11 +1160,13 @@ if __name__ == "__main__":
             loggingFile,
             append=True,
         )
+        callbacks = [checkpoint, csvLogger]
 
-        schedule = tf.keras.callbacks.ReduceLROnPlateau(
-            monitor="val_loss", factor=args.lrDecay, patience=1, verbose=1
-        )
-        callbacks = [checkpoint, csvLogger, schedule]
+        if args.lrDecay < 1.0:
+            schedule = tf.keras.callbacks.ReduceLROnPlateau(
+                monitor="val_loss", factor=args.lrDecay, patience=1, verbose=1
+            )
+            callbacks.append(schedule)
 
         # Train model
         fit = train_control_model(
