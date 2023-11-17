@@ -813,7 +813,7 @@ class diana:
             "root",
             0,
             data={
-                "objects": indices,
+                "indices": indices,
             },
         )
 
@@ -837,7 +837,7 @@ class diana:
     def split_cluster(self, nid):
         node = self.tree.get_node(nid)
 
-        oldCluster = np.copy(node.data["objects"])
+        oldCluster = np.copy(node.data["indices"])
         clusterSim = squareform(pdist(self.data[oldCluster,], metric=self.metric))
 
         # Find the item that is most dissimilar to the rest of the cluster
@@ -900,7 +900,7 @@ class diana:
             highestNid + 1,
             parent=nid,
             data={
-                "objects": oldCluster,
+                "indices": oldCluster,
             },
         )
 
@@ -913,7 +913,7 @@ class diana:
             highestNid + 2,
             parent=nid,
             data={
-                "objects": newCluster,
+                "indices": newCluster,
             },
         )
 
@@ -931,7 +931,7 @@ class diana:
         # Calculate diameter of each leaf
         diameters = np.zeros(len(leaves))
         for i, leaf in enumerate(leaves):
-            leafData = self.data[leaf.data["objects"], :]
+            leafData = self.data[leaf.data["indices"], :]
             if len(leafData) == 1:
                 diameters[i] = 0
             else:
@@ -962,7 +962,7 @@ class diana:
         # Loop through leaves
         for leaf in tree.leaves():
             # Each leaf is its own cluster, so stick together every object into a bigger and bigger cluster
-            cluster = leaf.data["objects"]
+            cluster = leaf.data["indices"]
 
             # If the cluster is only one object, just give it a nodeID of itself
             if len(cluster) == 1:
@@ -1020,8 +1020,8 @@ class diana:
 
                 # Calculate the mean distance bewteen the objects in each node
                 if calc_dist:
-                    node1Reps = self.data[node1.data["objects"]]
-                    node2Reps = self.data[node2.data["objects"]]
+                    node1Reps = self.data[node1.data["indices"]]
+                    node2Reps = self.data[node2.data["indices"]]
                     nodeDist = np.mean(cdist(node1Reps, node2Reps, self.metric))
                 else:
                     nodeDist = tree.depth() - tree.level(i) + 1
@@ -1031,7 +1031,7 @@ class diana:
                 linkage[rowCount, 0] = node1.data["linkID"]
                 linkage[rowCount, 1] = node2.data["linkID"]
                 linkage[rowCount, 2] = nodeDist
-                linkage[rowCount, 3] = len(ancestor.data["objects"])
+                linkage[rowCount, 3] = len(ancestor.data["indices"])
                 rowCount += 1
 
                 # Save the linkID to the ancestor
@@ -1049,13 +1049,13 @@ def get_nodes_at_level(tree, level):
 
 def get_leaves_from_node(tree, node):
     """Return the indices of the items (leaves) from a given node"""
-    leafList = [leaf.data["objects"] for leaf in tree.leaves(node)]
+    leafList = [leaf.data["indices"] for leaf in tree.leaves(node)]
     return np.concatenate(leafList)
 
 
 def external_evaluate_over_levels(tree, labels, metric, verbose=False):
     levels = range(1, labels.shape[1] + 1)
-    nLeaves = len(tree.get_node(0).data["objects"])
+    nLeaves = len(tree.get_node(0).data["indices"])
 
     scores = np.zeros(len(levels))
     for i, level in enumerate(levels):
@@ -1083,7 +1083,7 @@ def internal_evaluate_over_levels(tree, reps, metric, level=None, verbose=False)
     else:
         maxLevel = level + 1
     levels = range(1, maxLevel)
-    nLeaves = len(tree.get_node(0).data["objects"])
+    nLeaves = len(tree.get_node(0).data["indices"])
 
     scores = np.zeros(len(levels))
     for i, level in enumerate(levels):
@@ -1102,6 +1102,181 @@ def internal_evaluate_over_levels(tree, reps, metric, level=None, verbose=False)
             print(f"Level {level}: {score}")
 
     return scores
+
+
+def calc_cue_validity(exemplars, labels, binary=True, verbose=False):
+    categories = np.unique(labels)
+
+    cueValidities = {}
+    for category in categories:
+        cueValidity = 0
+        for k in range(exemplars.shape[1]):
+            if binary:
+                hasFeature = exemplars[:, k] > 0
+
+                # Check how many images with this feature are in this category
+                nImages = np.sum(hasFeature[labels == category])
+
+                cueValidity += nImages / exemplars.shape[0]
+            else:
+                # Binarize label
+                catLabels = np.float32(labels == category)
+
+                # Get features
+                featureStrength = exemplars[:, k]
+
+                # Calculate point biserial correlation with fisher Z transform
+                cueValidity += np.abs(
+                    np.arctanh(np.corrcoef(featureStrength, catLabels)[0, 1])
+                )
+
+        cueValidities[category] = cueValidity / exemplars.shape[1]
+
+        if binary:
+            # Z to r
+            cueValidities[category] = np.tanh(cueValidities[category])
+
+        if verbose:
+            print(
+                "Category: ",
+                category,
+                "Cue validity: ",
+                np.abs(cueValidity) / exemplars.shape[1],
+            )
+
+    return cueValidities
+
+
+def calc_category_validity(exemplars, labels, binary=True, verbose=False):
+    categories = np.unique(labels)
+
+    categoryValidities = {}
+    for category in categories:
+        categoryImgs = exemplars[category == labels, :]
+        category_validity = 0
+        for k in range(exemplars.shape[1]):
+            if binary:
+                # Check how many images has this feature
+                hasFeature = np.sum(categoryImgs[:, k] > 0)
+
+                # Add to category_validity
+                category_validity += hasFeature / categoryImgs.shape[0]
+            else:
+                # Average the feature absolute strength
+                category_validity += np.mean(np.abs(categoryImgs[:, k]))
+
+        # Save
+        categoryValidities[category] = category_validity / exemplars.shape[1]
+        if verbose:
+            print(
+                "Category: ",
+                category,
+                " Validity: ",
+                category_validity / exemplars.shape[1],
+            )
+
+    return categoryValidities
+
+
+def calc_collocation(exemplars, labels, binary=True, verbose=False):
+    categories = np.unique(labels)
+
+    collocations = {}
+    for category in categories:
+        categoryImgs = exemplars[category == labels, :]
+        category_validity = 0
+        cueValidity = 0
+        for k in range(exemplars.shape[1]):
+            if binary:
+                # Cue validity
+                hasFeature = exemplars[:, k] > 0
+
+                # Check how many images with this feature are in this category
+                nImages = np.sum(hasFeature[labels == category])
+
+                cueValidity += nImages / exemplars.shape[0]
+
+                # Category validity
+                hasFeature = np.sum(categoryImgs[:, k] > 0)
+
+                # Add to category_validity
+                category_validity += hasFeature / categoryImgs.shape[0]
+            else:
+                # Calculate cue validity
+                catLabels = np.float32(labels == category)
+
+                # Get features
+                features = exemplars[:, k]
+
+                # Calculate correlation
+                cueValidity += np.abs(
+                    np.arctanh(np.corrcoef(catLabels, features)[0, 1])
+                )
+
+                # Calculate category validity
+                category_validity += np.mean(np.abs(categoryImgs[:, k]))
+
+        # Divide by number of features
+        category_validity /= exemplars.shape[1]
+        cueValidity /= exemplars.shape[1]
+
+        collocations[category] = category_validity * cueValidity
+
+        if verbose:
+            print(
+                "Category: ",
+                category,
+                " Collocation: ",
+                category_validity * cueValidity,
+            )
+
+    return collocations
+
+
+def calc_category_utility(exemplars, labels, binary=True, verbose=False):
+    categories = np.unique(labels)
+
+    category_utilities = {}
+    for category in categories:
+        # Calculate the frequency of this category amongst all labels
+        category_frequency = np.sum(labels == category) / labels.shape[0]
+
+        # Loop through features
+        category_utility = 0
+        for k in range(exemplars.shape[1]):
+            categoryImgs = exemplars[category == labels, :]
+            if binary:
+                # Calculate the frequency that an image has this feature
+                feature_frequency = np.sum(exemplars[:, k] > 0) / exemplars.shape[0]
+
+                # Calculate category validity
+                hasFeature = np.sum(categoryImgs[:, k] > 0)
+                category_validity = hasFeature / categoryImgs.shape[0]
+
+                # Add to category validity
+                category_utility += (category_validity**2) - (feature_frequency**2)
+            else:
+                # Calculate average feature strength (regardless of category)
+                feature_strength = np.mean(np.abs(exemplars[:, k]))
+
+                # Calculate category validity
+                category_validity = np.mean(np.abs(categoryImgs[:, k]))
+
+                # Category utility
+                category_utility += category_validity - feature_strength
+
+        # Multiply by category frequency
+        category_utilities[category] = category_utility * category_frequency
+
+        if verbose:
+            print(
+                "Category: ",
+                category,
+                " Utility: ",
+                category_utility * category_frequency,
+            )
+
+    return category_utilities
 
 
 if __name__ == "__main__":
