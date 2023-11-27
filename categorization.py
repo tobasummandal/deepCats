@@ -7,6 +7,7 @@ from itertools import combinations
 from scipy.spatial.distance import pdist, squareform, cdist
 from scipy import stats
 from treelib import Tree
+from HiPart.clustering import IPDDP
 
 
 # List folders
@@ -1023,6 +1024,100 @@ class diana:
                     node1Reps = self.data[node1.data["indices"]]
                     node2Reps = self.data[node2.data["indices"]]
                     nodeDist = np.mean(cdist(node1Reps, node2Reps, self.metric))
+                else:
+                    nodeDist = tree.depth() - tree.level(i) + 1
+
+                # Add the new entry to linkage
+                linkID = rowCount + nData
+                linkage[rowCount, 0] = node1.data["linkID"]
+                linkage[rowCount, 1] = node2.data["linkID"]
+                linkage[rowCount, 2] = nodeDist
+                linkage[rowCount, 3] = len(ancestor.data["indices"])
+                rowCount += 1
+
+                # Save the linkID to the ancestor
+                ancestor.data["linkID"] = linkID
+
+        return linkage
+
+
+class myIPDDP(IPDDP):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def linkage_matrix(self, dist_metric=None):
+        # Copy tree
+        tree = Tree(self.tree.subtree(self.tree.root), deep=True)
+
+        nData = self.samples_number
+        # Start building linkage matrix
+        linkage = np.zeros((nData - 1, 4))
+        rowCount = 0
+
+        # Loop through leaves
+        for leaf in tree.leaves():
+            # Each leaf is its own cluster, so stick together every object into a bigger and bigger cluster
+            cluster = leaf.data["indices"]
+
+            # If the cluster is only one object, just give it a nodeID of itself
+            if len(cluster) == 1:
+                leaf.data["linkID"] = cluster[0]
+                continue
+
+            # Calculate the average distance between objects in the cluster
+            if dist_metric is not None:
+                clusterReps = self.X[cluster, :]
+                clusterDist = np.mean(pdist(clusterReps, metric=dist_metric))
+            else:
+                clusterDist = 0.2
+
+            # Stick the first two items together into a new cluster
+            linkage[rowCount, 0] = cluster[0]
+            linkage[rowCount, 1] = cluster[1]
+            linkage[rowCount, 2] = clusterDist
+            linkage[rowCount, 3] = 2
+            rowCount += 1
+
+            # Loop through the remaining items and stick it to this cluster
+            for i in range(2, len(cluster)):
+                linkID = rowCount + nData - 1
+                linkage[rowCount, 0] = cluster[i]
+                linkage[rowCount, 1] = linkID
+                linkage[rowCount, 2] = clusterDist
+                linkage[rowCount, 3] = linkage[rowCount - 1, 3] + 1
+                rowCount += 1
+
+            # Remember the linkID for this leaf cluster
+            leaf.data["linkID"] = rowCount + nData - 1
+
+        # Now loop through the tree and build the rest of the linkage matrix
+        for i in range(len(tree.nodes) - 1, -1, -1):
+            if i == 0:
+                continue
+
+            # if tree.get_node(i) is None:
+            #     continue
+
+            # Get the node's parent
+            ancestor = tree.get_node(tree.ancestor(i))
+
+            # Only work on this node if the parent doesn't have a linkID yet
+            if not "linkID" in ancestor.data:
+                # Get the node
+                node1 = tree.get_node(i)
+
+                # Get the node's sibling
+                node2 = tree.siblings(i)[0]
+
+                # # If sibling doesn't have link ID, skip this for now
+                # if not "linkID" in node2.data:
+                #     continue
+
+                # Calculate the mean distance bewteen the objects in each node
+                if dist_metric is not None:
+                    node1Reps = self.X[node1.data["indices"]]
+                    node2Reps = self.X[node2.data["indices"]]
+                    nodeDist = np.mean(cdist(node1Reps, node2Reps, metric=dist_metric))
                 else:
                     nodeDist = tree.depth() - tree.level(i) + 1
 
