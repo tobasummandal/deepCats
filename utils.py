@@ -8,6 +8,7 @@ import numpy as np
 import gc
 import categorization as cat
 from scipy.spatial.distance import pdist, squareform
+import pandas as pd
 
 
 def make_output_model(model, average_pooling=True, flatten=True):
@@ -232,9 +233,69 @@ def compute_sims_over_training(
     return simMat
 
 
+def get_image_info(directory):
+    """
+    Recursively go through the directory and build a dataframe with the
+    information about the images.
+    """
+    # Create dataframe
+    df = pd.DataFrame(columns=["path", "name", "super", "basic", "sub", "set"])
+
+    # Loop through train directory first
+    for root, dirs, files in os.walk(os.path.join(directory, "train")):
+        # Loop through files
+        for file in files:
+            # Ignore dstore
+            if file == ".DS_Store":
+                continue
+            # Add to dataframe
+            df = pd.concat(
+                [
+                    df,
+                    pd.DataFrame(
+                        {
+                            "path": [os.path.join(root, file)],
+                            "name": [file],
+                            "super": [root.split("/")[-3]],
+                            "basic": [root.split("/")[-2]],
+                            "sub": [root.split("/")[-1]],
+                            "set": ["train"],
+                        }
+                    ),
+                ],
+                ignore_index=True,
+            )
+
+    # Loop through test directory
+    for root, dirs, files in os.walk(os.path.join(directory, "test")):
+        # Loop through files
+        for file in files:
+            # Ignore dstore
+            if file == ".DS_Store":
+                continue
+
+            # Add to dataframe
+            df = pd.concat(
+                [
+                    df,
+                    pd.DataFrame(
+                        {
+                            "path": [os.path.join(root, file)],
+                            "name": [file],
+                            "super": [root.split("/")[-3]],
+                            "basic": [root.split("/")[-2]],
+                            "sub": [root.split("/")[-1]],
+                            "set": ["test"],
+                        }
+                    ),
+                ],
+                ignore_index=True,
+            )
+
+    return df
+
+
 if __name__ == "__main__":
-    # Load images
-    images = np.load("./images/deepCatsTrainImages.npy")
-    get_reps_over_training(
-        modelDir="./models/deepCats/AlexNet/seed01", layer="fc7", images=images
-    )
+    df = get_image_info("./images/deepCats/")
+    # Save df as csv
+    df.to_csv("./deepCatsImgs.csv", index=False)
