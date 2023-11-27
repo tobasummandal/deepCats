@@ -149,14 +149,36 @@ def create_flat_dataset(
         # List files in folder
         files = os.listdir(os.path.join(directory, folder))
         files.sort()
+        # Check if this folder has folders in it
+        if os.path.isdir(os.path.join(directory, folder, files[0])):
+            # List folders in this directory
+            subClasses = os.listdir(os.path.join(directory, folder))
+            subClasses.sort()
 
-        imgCount = 0
-        for file in files:
-            imgPaths.append(os.path.join(directory, folder, file))
-            labels.append(i)
-            imgCount += 1
+            # Count number of images in this folder
+            imgCount = 0
+            for subDir in subClasses:
+                # List files in this directory
+                files = os.listdir(os.path.join(directory, folder, subDir))
+                files.sort()
 
-        classCounts = np.append(classCounts, imgCount)
+                files = [
+                    os.path.join(directory, folder, subDir, file) for file in files
+                ]
+                imgPaths += files
+                labels += [i] * len(files)
+
+                imgCount += len(files)
+
+            classCounts = np.append(classCounts, imgCount)
+        else:
+            imgCount = 0
+            for file in files:
+                imgPaths.append(os.path.join(directory, folder, file))
+                labels.append(i)
+                imgCount += 1
+
+            classCounts = np.append(classCounts, imgCount)
 
     # Calculate class weights
     if filter is None:
@@ -207,7 +229,12 @@ def create_flat_dataset(
 
 
 def create_twohot_dataset(
-    directory, size=224, channel_first=False, batch_size=32, softmax_labels=False
+    directory,
+    sub_cat,
+    size=224,
+    channel_first=False,
+    batch_size=32,
+    softmax_labels=False,
 ):
     """
     Return a dataset given a nested directory structure. If the directory
@@ -221,12 +248,11 @@ def create_twohot_dataset(
     basicClasses.sort()
     nBasic = len(basicClasses)
 
-    # Find the basic class that has subdirectories and count subclasses
+    # Find the index of the subcategory and the number of subordinate categories it has
     twoHots = {}
-    for i, folder in enumerate(basicClasses):
-        files = os.listdir(os.path.join(directory, folder))
-        if os.path.isdir(os.path.join(directory, folder, files[0])):
-            twoHots[i] = len(files)
+    twoHots[basicClasses.index(sub_cat)] = len(
+        os.listdir(os.path.join(directory, sub_cat))
+    )
 
     # Get total number of classes
     nSub = sum(twoHots.values())
@@ -246,8 +272,8 @@ def create_twohot_dataset(
         # Create label
         label = [i]
 
-        # Check if this directory has directories in it
-        if os.path.isdir(os.path.join(directory, folder, files[0])):
+        # Check if this is the sub directory
+        if folder == sub_cat:
             # List folders in this directory
             subClasses = os.listdir(os.path.join(directory, folder))
             subClasses.sort()
@@ -276,7 +302,31 @@ def create_twohot_dataset(
 
             # Add to basic class counts
             basicCounts = np.append(basicCounts, np.sum(subCounts))
+        # Check if this directory has directories in it
+        elif os.path.isdir(os.path.join(directory, folder, files[0])):
+            # Add to unique labels
+            uniqueLabels.append(label)
 
+            # List folders in this directory
+            subClasses = os.listdir(os.path.join(directory, folder))
+            subClasses.sort()
+
+            subImgCounts = 0
+            for subDir in subClasses:
+                # List files in this directory
+                files = os.listdir(os.path.join(directory, folder, subDir))
+                files.sort()
+
+                # Add to labels
+                labels += [label] * len(files)
+
+                for file in files:
+                    imgPaths.append(os.path.join(directory, folder, subDir, file))
+
+                subImgCounts += len(files)
+
+            # Add to basic class counts
+            basicCounts = np.append(basicCounts, subImgCounts)
         else:
             # Add to unique labels
             uniqueLabels.append(label)
@@ -441,9 +491,6 @@ def train_ecocub_model(
 
     # Unfreeze penultimate layer and add regularizer
     model.layers[-6].trainable = True
-    model.layers[-6].kernel_regularizer = (
-        tf.keras.regularizers.l2(0.0005) if l2_reg else None
-    )
 
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=lr, epsilon=0.1),
@@ -510,6 +557,8 @@ def train_twohot_model(
                 kernel_regularizer=tf.keras.regularizers.l2(0.0005) if l2_reg else None,
                 name=f"sub{i}",
             )(x)
+            # Add layer to unfreeze
+            thaw_layers.append(f"sub{i}")
 
     x = tf.keras.layers.Conv2D(
         subNodes,
@@ -862,7 +911,13 @@ if __name__ == "__main__":
         "--dataDir",
         type=str,
         help="directory containing the training data",
-        default="./images/",
+        default="./images/ecoset_nestedSub",
+    )
+    parser.add_argument(
+        "--sub_class",
+        type=str,
+        help="directory that contains the subordinate classes",
+        default="0085_birds",
     )
     parser.add_argument(
         "--thaw_layers",
@@ -1011,13 +1066,15 @@ if __name__ == "__main__":
 
             trainDs, weights, twoHots = create_twohot_dataset(
                 os.path.join(args.dataDir, "train"),
+                args.sub_class,
                 size=224,
                 channel_first=False,
                 batch_size=32,
                 softmax_labels=args.softmax_labels,
             )
             valDs, _, _ = create_twohot_dataset(
-                os.path.join(args.dataDir, "val"),
+                os.path.join(args.dataDir, "test"),
+                args.sub_class,
                 size=224,
                 channel_first=False,
                 batch_size=32,
@@ -1033,6 +1090,7 @@ if __name__ == "__main__":
 
             hyperParams = (
                 f"{args.activation}"
+                f"-{args.sub_class}"
                 f"-lr{args.learningRate}"
                 f"-decay{args.lrDecay}"
                 f"{'-new_weights' if args.new_weights else ''}"
@@ -1149,7 +1207,7 @@ if __name__ == "__main__":
         # Create dataset
         trainDs, weights = create_flat_dataset(os.path.join(dataDir, "train"), size=224)
         valDs, _ = create_flat_dataset(
-            os.path.join(dataDir, "val"),
+            os.path.join(dataDir, "test"),
             size=224,
         )
 
@@ -1202,19 +1260,13 @@ if __name__ == "__main__":
             basic_weights=weights,
         )
     else:  # Main script
-        # tf.config.run_functions_eagerly(True)
-        # tf.data.experimental.enable_debug_mode()
+        tf.config.run_functions_eagerly(True)
+        tf.data.experimental.enable_debug_mode()
 
-        trainDs, basicWeights, subWeights = create_nested_dataset(
-            "./images/ecoset_nestedCUB/train",
+        create_flat_dataset(
+            "./images/ecoset_nestedSub/train",
             size=224,
             channel_first=False,
             batch_size=32,
-            not_birds=False,
+            filter=None,
         )
-
-        while True:
-            # Get a batch
-            img, (basicLabel, subLabel) = list(trainDs.take(1).as_numpy_iterator())[0]
-            if np.any(basicLabel[:, 25] == 1):
-                subLabel
