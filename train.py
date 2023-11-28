@@ -770,7 +770,7 @@ def train_control_model(
 
 
 class TwoHotSubAccuracy(tf.keras.metrics.Metric):
-    def __init__(self, sub_nodes, top_k=1, name="sub_accuracy", **kwargs):
+    def __init__(self, sub_nodes=200, top_k=1, name="sub_accuracy", **kwargs):
         super(TwoHotSubAccuracy, self).__init__(name=name, **kwargs)
         self.top_k = top_k
         self.sub_nodes = sub_nodes
