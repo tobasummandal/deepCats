@@ -4,3 +4,4 @@ images/
 .vscode/
 *.tar.gz
 representations/
+batchCommand*
