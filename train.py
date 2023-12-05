@@ -860,6 +860,72 @@ class OneHotBirdAccuracy(tf.keras.metrics.Metric):
         )
 
 
+def validate_sub_dataset(model, directory, category):
+    """
+    Test the accuracy of the model on the subordinate category contained in
+    the directory.
+    """
+    # list folders inside directory (and sort)
+    classes = os.listdir(directory)
+    classes.sort()
+
+    # Find what index the category is
+    categoryIdx = classes.index(category)
+
+    # List the subclasses inside category
+    subClasses = os.listdir(os.path.join(directory, category))
+    subClasses.sort()
+
+    # Create a flat dataset from the category
+    ds, _ = create_flat_dataset(
+        os.path.join(directory, category),
+        size=224,
+        channel_first=False,
+        batch_size=32,
+    )
+
+    # Loop through batches
+    nCorrect = 0
+    nIncorrect = 0
+    incorrectCats = np.empty(0)
+    for x, y in ds:
+        y = tf.argmax(y, axis=-1)
+
+        # Predict x
+        y_pred = model.predict(x)
+
+        # Check how many match the category index
+        correct = tf.equal(tf.argmax(y_pred, axis=-1), categoryIdx)
+        nCorrect += np.sum(correct)
+        nIncorrect += np.sum(~correct)
+
+        # If there are any incorrect
+        if np.sum(~correct) > 0:
+            # Get the incorrect categories
+            incorrectCats = np.append(incorrectCats, y[~correct])
+
+    # Print results
+    print(f"Correct: {nCorrect}")
+    print(f"Incorrect: {nIncorrect}")
+    print(f"Accuracy: {nCorrect / (nCorrect + nIncorrect)}")
+
+    # Get counts of incorrectCats
+    uniqueVals, counts = np.unique(incorrectCats, return_counts=True)
+    uniqueVals = uniqueVals.astype(int)
+
+    # Sort by counts
+    sortIdx = np.argsort(counts)[::-1]
+    uniqueVals = uniqueVals[sortIdx]
+    counts = counts[sortIdx]
+
+    # Print
+    print("Incorrect counts:")
+    for val, count in zip(uniqueVals, counts):
+        print(f"{subClasses[val]}: {count}")
+
+    return uniqueVals, counts
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -1262,11 +1328,15 @@ if __name__ == "__main__":
     else:  # Main script
         tf.config.run_functions_eagerly(True)
         tf.data.experimental.enable_debug_mode()
+        os.environ["CUDA_VISIBLE_DEVICES"] = '0'
+        strategy = tf.distribute.get_strategy()
 
-        create_flat_dataset(
-            "./images/ecoset_nestedSub/train",
-            size=224,
-            channel_first=False,
-            batch_size=32,
-            filter=None,
-        )
+        with strategy.scope():
+            # Load model
+            weightPath = f"./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_01/model.ckpt_epoch89"
+            model = ecoset.make_alex_net_v2(
+                weights_path=weightPath, input_shape=(224, 224, 3), softmax=True
+            )
+
+            # Validate dataset
+            validate_sub_dataset(model, "./images/ecoset_nestedSub/test", "0085_bird")
