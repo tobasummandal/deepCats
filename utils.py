@@ -295,7 +295,66 @@ def get_image_info(directory):
     return df
 
 
+def get_category_nodes(data_dir, img_info):
+    """
+    Return a dictionary of indices for all levels of the hierarchy derived from
+    img_info by looking in data_dir.
+    """
+    category_nodes = {}
+
+    # List folders in data_dir
+    cats = os.listdir(data_dir)
+    cats.sort()
+
+    # Start at the basic level for imgInfo
+    basicCats = img_info["basic"].unique()
+
+    # For each basic cats, find the node
+    for cat in basicCats:
+        nodes = [i for i, folder in enumerate(cats) if cat in folder]
+
+        if len(nodes) == 0:
+            raise ValueError(f"Could not find node for {cat}")
+        elif len(nodes) > 1:
+            print(f"Found multiple nodes for {cat}")
+            print(f"Nodes: {nodes}")
+            print(f"Labels: {[cats[i] for i in nodes]}")
+            choice = input("Which one to use (1, 2, ... n) ? ")
+            category_nodes[cat] = nodes[int(choice) - 1]
+        else:
+            category_nodes[cat] = nodes[0]
+
+    # For each super cat, use its basic nodes
+    superCats = img_info["super"].unique()
+    for cat in superCats:
+        basicCats = img_info.loc[img_info["super"] == cat, "basic"].unique()
+        category_nodes[cat] = [category_nodes[basicCat] for basicCat in basicCats]
+
+    # For each subordinate cat, look in the basic cat directory to find node
+    subCats = img_info["sub"].unique()
+    for cat in subCats:
+        basicCat = img_info.loc[img_info["sub"] == cat, "basic"].unique()[0]
+        basicNode = category_nodes[basicCat]
+
+        subNodes = os.listdir(os.path.join(data_dir, cats[basicNode]))
+        subNodes.sort()
+
+        category_nodes[cat] = subNodes.index(cat)
+
+    return category_nodes
+
+
 if __name__ == "__main__":
-    df = get_image_info("./images/deepCats/")
-    # Save df as csv
-    df.to_csv("./deepCatsImgs.csv", index=False)
+    import json 
+
+    imgInfo = pd.read_csv("./deepCatsImgs.csv")
+    category_nodes = get_category_nodes("./images/ecoset_nestedSub/test", imgInfo)
+
+    # Save as json
+    with open('category_nodes.json', 'w') as f:
+        json.dump(category_nodes, f)
+
+    # Load from json
+    with open('category_nodes.json', 'r') as f:
+        loaded_category_nodes = json.load(f)
+    
