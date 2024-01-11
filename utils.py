@@ -344,17 +344,48 @@ def get_category_nodes(data_dir, img_info):
     return category_nodes
 
 
+def find_nested_synsets(targetSynset, synsets):
+    """
+    Return the index and synsets from the list synsets that is nested under
+    the targetSynset
+    """
+    nestedIdxs, nestedSynsets = [], []
+    for i, synset in enumerate(synsets):
+        lowest_common_hypernyms = synset.lowest_common_hypernyms(targetSynset)
+        if targetSynset in lowest_common_hypernyms:
+            nestedIdxs.append(i)
+            nestedSynsets.append(synset)
+
+    return nestedIdxs, nestedSynsets
+
+
+def extract_training_data(directory):
+    """
+    Return a dataframe of training trajectory information for each model in
+    directory.
+    """
+    # List folders in directory
+    folders = os.listdir(directory)
+
+    # Check the first folder to get the dataframe spec
+    files = os.listdir(os.path.join(directory, folders[0]))
+    csv = [file for file in files if file.endswith(".csv")][0]
+    df = pd.read_csv(os.path.join(directory, folders[0], csv))
+
+    # Loop through the rest of the folders and concatenate
+    for folder in folders[1:]:
+        files = os.listdir(os.path.join(directory, folder))
+        csv = [file for file in files if file.endswith(".csv")][0]
+        df = pd.concat(
+            [
+                df,
+                pd.read_csv(os.path.join(directory, folder, csv)),
+            ],
+            ignore_index=True,
+        )
+
+    return df, csv.split(".csv")[0].split("-")[1:]
+
+
 if __name__ == "__main__":
-    import json 
-
-    imgInfo = pd.read_csv("./deepCatsImgs.csv")
-    category_nodes = get_category_nodes("./images/ecoset_nestedSub/test", imgInfo)
-
-    # Save as json
-    with open('category_nodes.json', 'w') as f:
-        json.dump(category_nodes, f)
-
-    # Load from json
-    with open('category_nodes.json', 'r') as f:
-        loaded_category_nodes = json.load(f)
-    
+    extract_training_data("./models/deepCats/AlexNet/twoHotFreezeBasic/")
