@@ -9,6 +9,7 @@ import gc
 import categorization as cat
 from scipy.spatial.distance import pdist, squareform
 import pandas as pd
+from nltk.corpus import wordnet as wn
 
 
 def make_output_model(model, average_pooling=True, flatten=True):
@@ -324,11 +325,31 @@ def get_category_nodes(data_dir, img_info):
         else:
             category_nodes[cat] = nodes[0]
 
-    # For each super cat, use its basic nodes
+    # Get all the names of the categories
+    synsets = []
+    for cat in cats:
+        tmp = wn.synsets(cat.split("_")[-1], pos=wn.NOUN)
+        if len(tmp) > 0:
+            synsetList = sum(tmp[0].hypernym_paths(), [])
+            synsets.append(synsetList)
+        else:
+            synsets.append(None)
+            print("Could not find synset for ", cat)
+
+    # For each super cat, use wordnet hierarchy to figure out valid nodes
     superCats = img_info["super"].unique()
     for cat in superCats:
-        basicCats = img_info.loc[img_info["super"] == cat, "basic"].unique()
-        category_nodes[cat] = [category_nodes[basicCat] for basicCat in basicCats]
+        # Get the synset for the super category
+        synset = wn.synsets(cat, pos=wn.NOUN)[0]
+        superNodes = []
+        for i, synsetList in enumerate(synsets):
+            if synsetList is None:
+                continue
+
+            if synset in synsetList:
+                superNodes.append(i)
+
+        category_nodes[cat] = superNodes
 
     # For each subordinate cat, look in the basic cat directory to find node
     subCats = img_info["sub"].unique()
@@ -345,16 +366,15 @@ def get_category_nodes(data_dir, img_info):
 
 
 if __name__ == "__main__":
-    import json 
+    import json
 
     imgInfo = pd.read_csv("./deepCatsImgs.csv")
     category_nodes = get_category_nodes("./images/ecoset_nestedSub/test", imgInfo)
 
     # Save as json
-    with open('category_nodes.json', 'w') as f:
+    with open("category_nodes.json", "w") as f:
         json.dump(category_nodes, f)
 
     # Load from json
-    with open('category_nodes.json', 'r') as f:
+    with open("category_nodes.json", "r") as f:
         loaded_category_nodes = json.load(f)
-    
