@@ -745,8 +745,10 @@ def train_control_model(
 
     if basic_weights is None:
         model.compile(
-            optimizer=tf.keras.optimizers.Adam(lr=lr, epsilon=0.1, weight_decay=0.0005),
-            loss=tf.keras.loss.CategoricalCrossentropy(),
+            optimizer=tf.keras.optimizers.Adam(
+                learning_rate=lr, epsilon=0.1, weight_decay=0.0005
+            ),
+            loss=tf.keras.losses.CategoricalCrossentropy(),
             metrics=["accuracy", "top_k_categorical_accuracy"],
         )
     else:
@@ -766,7 +768,7 @@ def train_control_model(
         callbacks=callbacks,
     )
 
-    return fit
+    return fit, model
 
 
 class TwoHotSubAccuracy(tf.keras.metrics.Metric):
@@ -983,7 +985,7 @@ if __name__ == "__main__":
         "--sub_class",
         type=str,
         help="directory that contains the subordinate classes",
-        default="0085_birds",
+        default="0085_bird",
     )
     parser.add_argument(
         "--thaw_layers",
@@ -1028,6 +1030,12 @@ if __name__ == "__main__":
         type=int,
         help="number of extra layers to add to the sub branch",
         default=0,
+    )
+    parser.add_argument(
+        "--pretrain",
+        help="whether to pretrain the model",
+        default=False,
+        action="store_true",
     )
     parser.add_argument(
         "--gpu_id",
@@ -1126,9 +1134,64 @@ if __name__ == "__main__":
     elif args.script == "twoHot":
         weightPath = f"./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_{seed:02}/model.ckpt_epoch89"
         with strategy.scope():
-            model = ecoset.make_alex_net_v2(
-                weights_path=weightPath, input_shape=(224, 224, 3), l2_reg=args.l2_reg
-            )
+            if args.pretrain:
+                modelReady = False
+                # Look for a control model with the first epoch done
+                controlPath = os.path.join(
+                    f"./models/deepCats/AlexNet/control/seed{seed:02}"
+                )
+                if os.path.exists(controlPath):
+                    # List files
+                    files = os.listdir(controlPath)
+                    epochs = [file for file in files if "epoch" in file]
+                    epochs.sort()
+                    if len(epochs) > 0:
+                        # Load the last model
+                        model = tf.keras.models.load_model(
+                            os.path.join(controlPath, epochs[-1]), compile=False
+                        )
+                        print("Loaded model from ", epochs[-1])
+                        modelReady = True
+
+                if not modelReady:
+                    print("Training model for 1 epoch without subordinate category")
+                    model = ecoset.make_alex_net_v2(
+                        weights_path=weightPath,
+                        input_shape=(224, 224, 3),
+                        l2_reg=args.l2_reg,
+                        softmax=True,
+                    )
+
+                    # Create dataset
+                    trainDs, weights = create_flat_dataset(
+                        os.path.join(args.dataDir, "train"), size=224
+                    )
+                    valDs, _ = create_flat_dataset(
+                        os.path.join(args.dataDir, "test"),
+                        size=224,
+                    )
+
+                    # Train model
+                    _, model = train_control_model(
+                        model=model,
+                        trainDs=trainDs,
+                        valDs=valDs,
+                        lr=args.learningRate,
+                        epochs=1,
+                        thaw_layers=args.thaw_layers,
+                        basic_weights=weights,
+                    )
+
+                # Remove the last layer of model
+                model = tf.keras.Model(
+                    inputs=model.input, outputs=model.layers[-2].output
+                )
+            else:
+                model = ecoset.make_alex_net_v2(
+                    weights_path=weightPath,
+                    input_shape=(224, 224, 3),
+                    l2_reg=args.l2_reg,
+                )
 
             trainDs, weights, twoHots = create_twohot_dataset(
                 os.path.join(args.dataDir, "train"),
@@ -1162,6 +1225,7 @@ if __name__ == "__main__":
                 f"{'-new_weights' if args.new_weights else ''}"
                 f"{'-softmax_labels' if args.softmax_labels else ''}"
                 f"{'-l2_reg' if args.l2_reg else ''}"
+                f"{'-pretrained' if args.pretrain else ''}"
                 f"{'-sub_layers'+str(args.sub_layers) if args.sub_layers > 0 else ''}"
             )
             thawed = "-thaw"
@@ -1315,7 +1379,7 @@ if __name__ == "__main__":
             callbacks.append(schedule)
 
         # Train model
-        fit = train_control_model(
+        fit, _ = train_control_model(
             model=model,
             trainDs=trainDs,
             valDs=valDs,
@@ -1328,7 +1392,7 @@ if __name__ == "__main__":
     else:  # Main script
         tf.config.run_functions_eagerly(True)
         tf.data.experimental.enable_debug_mode()
-        os.environ["CUDA_VISIBLE_DEVICES"] = '0'
+        os.environ["CUDA_VISIBLE_DEVICES"] = "0"
         strategy = tf.distribute.get_strategy()
 
         with strategy.scope():
@@ -1339,4 +1403,6 @@ if __name__ == "__main__":
             )
 
             # Validate dataset
-            validate_sub_dataset(model, "./images/ecoset_nestedSub/test", "0085_bird")
+            validate_sub_dataset(
+                model, "./images/ecoset_nestedSub/test", "0356_airplane"
+            )
