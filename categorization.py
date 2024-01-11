@@ -497,12 +497,13 @@ def cat_verification_from_mat(
     simMat: np.ndarray,
     imgInfo: pd.DataFrame,
     modelName: str,
-    criterion: float,
+    criterion: float = None,
     maxImgs: int = None,
 ) -> pd.DataFrame:
     """
     Simulate a category verification task given a similarity matrix with image
-    info using an LBA with a criterion.
+    info using an LBA with a criterion. If criterion is None, set the criterion
+    to result in 95% accuracy.
     """
     # Find the unique categories at each level
     levelCats = {
@@ -543,16 +544,27 @@ def cat_verification_from_mat(
             # Filter similarity matrix for only the images we need
             catSimMat = simMat[testIdxs, :][:, trainIdxs]
 
+            if maxImgs is not None:
+                # Create a new similarity matrix with only maxImgs images
+                newSimMat = np.zeros((catSimMat.shape[0], maxImgs))
+                for i, row in enumerate(catSimMat):
+                    newSimMat[i, :] = np.random.choice(row, maxImgs, False)
+
+                # Save over
+                catSimMat = newSimMat
+
+            evidences = np.sum(catSimMat, axis=1)
+
+            if criterion is None:
+                # Find a criterion where 95% of the time it is correct
+                crit = np.quantile(evidences, 0.05)
+            else:
+                crit = criterion
+
             # Loop through the test images
-            for i, imgSims in enumerate(catSimMat):
-                # Randomly select exemplars if needed
-                if maxImgs is not None:
-                    imgSims = np.random.choice(imgSims, maxImgs, False)
-
-                evidence = np.sum(imgSims)
-
+            for i, evidence in enumerate(evidences):
                 # Calculate drift
-                drift = evidence / (evidence + criterion)
+                drift = evidence / (evidence + crit)
                 resp, rt = LBA_deterministic(drift, 1 - drift, b=0.5)
                 resp = "yes" if resp == 1 else "no"
 
@@ -568,7 +580,7 @@ def cat_verification_from_mat(
                                 "level": level,
                                 "response": resp,
                                 "RT": rt,
-                                "crit": criterion,
+                                "crit": crit,
                                 "maxImgs": maxImgs,
                             },
                             index=[0],
@@ -706,6 +718,16 @@ def default_gcm_sim_mat(reps):
         -1
         * squareform(pdist(reps, metric="euclidean"))
         * ((1 / reps.shape[1]) ** (1 / 2))
+    )
+
+
+def default_gcm_cdist(reps1, reps2):
+    """
+    Calculate pairwise similarity between reps1 and reps 2 using GCM with r=2,
+    c=1, p=1
+    """
+    return np.exp(
+        -1 * cdist(reps1, reps2, metric="euclidean") * ((1 / reps1.shape[1]) ** (1 / 2))
     )
 
 
