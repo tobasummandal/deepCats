@@ -741,13 +741,11 @@ def exemplar_maker(n, center, radius=1, radius_density="uniform", relu=False):
     if radius_density == "power":
         radii = (uniforms ** (1 / nDims)) * radius
     elif radius_density == "normal":
-        radii = (
-            (uniforms ** (1 / nDims))
-            * np.abs(np.random.normal(loc=0, scale=1, size=n))
-            * radius
-        )
+        radii = np.abs(np.random.normal(loc=0, scale=1, size=n)) * radius
     elif radius_density == "uniform":
         radii = uniforms * radius
+    elif radius_density == "lognormal":
+        radii = np.random.lognormal(mean=0, sigma=1/3, size=n) * radius
     else:
         raise ValueError("Density type not recognized")
 
