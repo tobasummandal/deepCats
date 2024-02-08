@@ -710,24 +710,24 @@ class SimCluster:
             print("--")
 
 
-def default_gcm_sim_mat(reps):
+def default_gcm_sim_mat(reps, c=1.0):
     """
     Calculate a similarity matrix using GCM with r=2, c=1, p=1.
     """
     return np.exp(
-        -1
+        -c
         * squareform(pdist(reps, metric="euclidean"))
         * ((1 / reps.shape[1]) ** (1 / 2))
     )
 
 
-def default_gcm_cdist(reps1, reps2):
+def default_gcm_cdist(reps1, reps2, c=1.0):
     """
     Calculate pairwise similarity between reps1 and reps 2 using GCM with r=2,
     c=1, p=1
     """
     return np.exp(
-        -1 * cdist(reps1, reps2, metric="euclidean") * ((1 / reps1.shape[1]) ** (1 / 2))
+        -c * cdist(reps1, reps2, metric="euclidean") * ((1 / reps1.shape[1]) ** (1 / 2))
     )
 
 
@@ -745,7 +745,7 @@ def exemplar_maker(n, center, radius=1, radius_density="uniform", relu=False):
     elif radius_density == "uniform":
         radii = uniforms * radius
     elif radius_density == "lognormal":
-        radii = np.random.lognormal(mean=0, sigma=1/3, size=n) * radius
+        radii = np.random.lognormal(mean=0, sigma=1 / 3, size=n) * radius
     else:
         raise ValueError("Density type not recognized")
 
@@ -1394,39 +1394,261 @@ def calc_category_utility(exemplars, labels, binary=True, verbose=False):
     return category_utilities
 
 
+def cartesian_to_polar(coords):
+    """
+    Convert cartesian coordinates to polar coordinates
+    """
+    r = np.linalg.norm(coords)
+    thetas = np.zeros(len(coords) - 1)
+
+    for i in range(len(thetas)):
+        thetas[i] = np.arctan2(np.linalg.norm(coords[i + 1 :]), coords[i])
+
+    return r, thetas
+
+
+def polar_to_cartesian(r, thetas):
+    """
+    Convert polar coordinates to cartesian coordinates
+    """
+    coords = np.zeros(len(thetas) + 1)
+
+    for i in range(len(thetas)):
+        coords[i] = r * np.prod(np.sin(thetas[:i])) * np.cos(thetas[i])
+
+    coords[-1] = r * np.prod(np.sin(thetas))
+
+    return coords
+
+
+class EBRW:
+    def __init__(
+        self,
+        memory_reps: np.ndarray,
+        memory_categories: np.ndarray,
+        memory_strengths: np.ndarray = None,
+        p: float = 2.0,
+        c: float = 1.0,
+        b: float = 0,
+        A: float = 10,
+        B: float = 10,
+        alpha: float = 1,
+    ):
+        """
+        Return an instance of the EBRW model starting with the given memory
+        represntations and their categories (index labels).
+        """
+        # Memory
+        self.memory_reps = memory_reps
+        self.memory_categories = memory_categories
+        self.memory_strengths = (
+            memory_strengths
+            if memory_strengths is not None
+            else np.ones(len(memory_categories))
+        )
+        self.categories = np.unique(memory_categories)
+
+        if len(self.categories) > 2:
+            raise ValueError("We only supports binary categorization")
+
+        # Model parameters
+        self.p = p  # Done
+        self.c = c  # Done
+        self.b = b  # ??
+        self.A = A
+        self.B = B
+        self.alpha = alpha
+
+    def _sim(self, probes: np.ndarray, category: int, metric="minkowski", **kwargs):
+        """
+        Calculates the similarity between the probe items and the
+        represenations in category. Calculates distance using cdist with
+        defaults for EBRW. Chiefly, default Minkowski distance with p=2 and
+        w=1/n_features. The metric and kwargs can be changed to modify this. The
+        distance is then used to calculate similarity alongside the c parameter.
+        """
+        if metric == "minkowski":
+            if "p" not in kwargs.keys():
+                kwargs["p"] = self.p
+
+            if "w" not in kwargs.keys():
+                kwargs["w"] = np.ones(probes.shape[1]) / probes.shape[1]
+
+        # Get memory_reps that match the category
+        category_reps = self.memory_reps[self.memory_categories == category]
+
+        if len(category_reps) == 0:
+            return np.zeros((probes.shape[0],))
+
+        # Calculate distances
+        dists = cdist(probes, category_reps, metric=metric, **kwargs)
+
+        # Calculate similarity
+        return np.exp(-self.c * dists)
+
+    def _sum_sims(self, probes, **kwargs):
+        """
+        Return the sum similarities given the probes.
+        """
+        # Calculate sum similarities
+        sumA = np.sum(self._sim(probes, self.categories[0], **kwargs), axis=1)
+
+        if len(self.categories) == 1:
+            return sumA, 0
+        else:
+            sumB = np.sum(self._sim(probes, self.categories[1], **kwargs), axis=1)
+
+            return sumA, sumB
+
+    def _prob_step(self, sumA, sumB):
+        """
+        Return the probability of stepping towards the category from the sum
+        similarity.
+        """
+        p = (sumA + self.b) / (sumA + sumB + (self.b * 2))
+
+        return p, 1 - p
+
+    def categorize(self, probes, categories, **kwargs):
+        """
+        Return the responses and RT for each probe targetting each category.
+        """
+        # First calculate sum similarities
+        sumA, sumB = self._sum_sims(probes, **kwargs)
+
+        # Calculate step probabilities
+        p, q = self._prob_step(sumA, sumB)
+
+        # Calculate probability of category choices
+        top = 1 - ((q / p) ** self.B)
+        bot = 1 - ((q / p) ** (self.A + self.B))
+        pA = top / bot
+
+        top = ((q / p) ** self.B) - ((q / p) ** (self.A + self.B))
+        bot = 1 - ((q / p) ** (self.A + self.B))
+        pB = top / bot
+
+        # Calculate expected number of steps for each type of response
+        # Calculate steps A
+        top = ((p / q) ** (self.A + self.B)) + 1
+        bot = ((p / q) ** (self.A + self.B)) - 1
+        theta1A = top / bot
+
+        top = ((p / q) ** -self.B) + 1
+        bot = ((p / q) ** -self.B) - 1
+        theta2A = top / bot
+
+        top = (theta1A * (self.A + self.B)) - (theta2A * self.B)
+        bot = p - q
+        stepsA = top / bot
+
+        # Calculate steps B
+        top = ((p / q) ** -(self.A - self.B)) + 1
+        bot = ((p / q) ** -(self.A - self.B)) - 1
+        theta1B = top / bot
+
+        top = ((p / q) ** self.A) + 1
+        bot = ((p / q) ** self.A) - 1
+        theta2B = top / bot
+
+        top = (theta1B * (self.A + self.B)) - (theta2B * self.A)
+        bot = q - p
+        stepsB = top / bot
+
+        # Stick the steps together
+        steps = np.stack([stepsA, stepsB], axis=1)
+
+        # Calculate decisions
+        decisions = np.zeros((probes.shape[0],), dtype=np.int32)
+        rts = np.zeros((probes.shape[0],))
+        for i in range(probes.shape[0]):
+            if categories[i] == self.categories[0]:
+                decision = np.random.choice([0, 1], p=[pA[i], 1 - pA[i]]).astype(np.int32)
+                decisions[i] = decision
+                rts[i] = steps[i, decision]
+            else:
+                decision = np.random.choice([0, 1], p=[pB[i], 1 - pB[i]]).astype(np.int32)
+                decisions[i] = decision
+                rts[i] = steps[i, decision]
+
+        return decisions, rts
+
+
 if __name__ == "__main__":
+    import ecoset
+    from tensorflow.keras.models import Model
 
-    def cartesian_to_polar(coords):
-        """
-        Convert cartesian coordinates to polar coordinates
-        """
-        r = np.linalg.norm(coords)
-        thetas = np.zeros(len(coords) - 1)
+    imgPath = "./images/allBirds/train"
 
-        for i in range(len(thetas)):
-            thetas[i] = np.arctan2(np.linalg.norm(coords[i + 1 :]), coords[i])
+    # list files
+    files = os.listdir(imgPath)
 
-        return r, thetas
+    # Preallocate array for each iamge
+    allImages = np.zeros((len(files), 224, 224, 3))
 
-    def polar_to_cartesian(r, thetas):
-        """
-        Convert polar coordinates to cartesian coordinates
-        """
-        coords = np.zeros(len(thetas) + 1)
+    for i, file in enumerate(files):
+        # Load image
+        img = Image.open(os.path.join(imgPath, file))
 
-        for i in range(len(thetas)):
-            coords[i] = r * np.prod(np.sin(thetas[:i])) * np.cos(thetas[i])
+        # Preprocess image
+        img = ecoset.preprocess_alexnet(img)
 
-        coords[-1] = r * np.prod(np.sin(thetas))
+        # Add to array
+        allImages[i, :, :, :] = img
 
-        return coords
+    weightPath = f"./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_01/model.ckpt_epoch89"
+    model = ecoset.make_alex_net_v2(weights_path=weightPath)
 
-    cartOrig = exemplar_maker(1, np.zeros((10,)), radius=1)
+    # Get weights for the classification layer
+    weights = model.get_layer("fc8").get_weights()[0]
 
-    r, pol = cartesian_to_polar(cartOrig[0])
-    cartConvert = polar_to_cartesian(r, pol)
+    # Filter for only the birds (idx 25) then flatten
+    birdWeights = np.squeeze(weights[:, :, :, 25])
+    birdWeights = np.concatenate(
+        [np.tile(weight, (5, 5, 1)) for weight in birdWeights], axis=2
+    )
 
-    print(cartOrig)
-    print(r, pol)
-    print(cartConvert)
-    print(cartOrig - cartConvert)
+    # Get activations from penulatimate layer
+    layer = model.get_layer("fc7")
+
+    # Change activation to linear
+    layer.activation = tf.keras.activations.linear
+
+    model = Model(inputs=model.inputs, outputs=layer.output)
+
+    # Predict with model with cpu
+    with tf.device("/cpu:0"):
+        reps = model.predict(allImages)
+
+    # Apply global average pooling
+    reps = np.mean(reps, axis=(1, 2))
+    categories = np.array([0] * len(reps))
+
+    # Load up test images
+    imgPath = "./images/allBirds/test"
+
+    # list files
+    files = os.listdir(imgPath)
+
+    # Preallocate array for each iamge
+    allImages = np.zeros((len(files), 224, 224, 3))
+
+    for i, file in enumerate(files):
+        # Load image
+        img = Image.open(os.path.join(imgPath, file))
+
+        # Preprocess image
+        img = ecoset.preprocess_alexnet(img)
+
+        # Add to array
+        allImages[i, :, :, :] = img
+
+    # Predict with model with cpu
+    with tf.device("/cpu:0"):
+        probes = model.predict(allImages)
+
+    # Apply global average pooling
+    probes = np.mean(probes, axis=(1, 2))
+
+    model = EBRW(memory_reps=reps, memory_categories=categories, b=1000)
+    model.categorize(probes, np.array([0] * len(probes)))
