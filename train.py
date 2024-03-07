@@ -3,6 +3,7 @@ import os
 import numpy as np
 import ecoset
 from sklearn.utils.class_weight import compute_sample_weight
+import glob
 
 
 def create_nested_dataset(
@@ -771,6 +772,59 @@ def train_control_model(
     return fit, model
 
 
+def train_finetune_model(
+    model,
+    trainDs,
+    valDs,
+    lr,
+    epochs,
+    basic_weights=None,
+    thaw_layers=["fc7", "fc8"],
+    callbacks=[],
+):
+    """
+    Train a model following the basic fine tuning procedures.
+    """
+    # Freeze all layers
+    for layer in model.layers:
+        layer.trainable = False
+
+    # Thaw layers
+    if "all" in thaw_layers:
+        for layer in model.layers:
+            layer.trainable = True
+    else:
+        for layer in thaw_layers:
+            model.get_layer(layer).trainable = True
+
+    if basic_weights is None:
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(
+                learning_rate=lr, epsilon=0.1, weight_decay=0.0005
+            ),
+            loss=tf.keras.losses.CategoricalCrossentropy(),
+            metrics=["accuracy", "top_k_categorical_accuracy"],
+        )
+    else:
+        model.compile(
+            optimizer=tf.keras.optimizers.Adam(
+                learning_rate=lr, epsilon=0.1, weight_decay=0.0005
+            ),
+            loss=weighted_cce(basic_weights),
+            metrics=["accuracy", "top_k_categorical_accuracy"],
+        )
+
+    # Train model
+    fit = model.fit(
+        trainDs,
+        epochs=epochs,
+        validation_data=valDs,
+        callbacks=callbacks,
+    )
+
+    return fit, model
+
+
 class TwoHotSubAccuracy(tf.keras.metrics.Metric):
     def __init__(self, sub_nodes=200, top_k=1, name="sub_accuracy", **kwargs):
         super(TwoHotSubAccuracy, self).__init__(name=name, **kwargs)
@@ -926,6 +980,103 @@ def validate_sub_dataset(model, directory, category):
         print(f"{subClasses[val]}: {count}")
 
     return uniqueVals, counts
+
+
+def create_level_dataset(
+    directory, level, size=224, channel_first=False, batch_size=32
+):
+    """
+    Return a dataset given a nested directory structure to specifically train at
+    a specific level.
+    """
+    # Go through the nested directory and fill in categoryLevels
+    categoryLevels = {}
+
+    # Fill in level 1 first
+    tmp = [
+        file for file in glob.glob(os.path.join(directory, "*")) if os.path.isdir(file)
+    ]
+    tmp.sort()
+    categoryLevels[1] = tmp
+
+    curLevel = 1
+    while True:
+        categories = categoryLevels[curLevel]
+
+        levelCats = []
+        for cat in categories:
+            levelCats += [
+                file
+                for file in glob.glob(os.path.join(cat, "*"))
+                if os.path.isdir(file)
+            ]
+        levelCats.sort()
+
+        # Check if levelCats is empty
+        if len(levelCats) == 0:
+            break
+
+        # Incrememnt curLevel and save
+        curLevel += 1
+        categoryLevels[curLevel] = levelCats
+
+    # Get the categories at level
+    categories = categoryLevels[level]
+
+    categoryCounts = np.array([])
+    paths = []
+    labels = []
+    for i, cat in enumerate(categories):
+        files = glob.glob(os.path.join(cat, "**/*.jpg"), recursive=True)
+        nFiles = len(files)
+
+        paths += files
+        labels += [i] * nFiles
+
+        categoryCounts = np.append(categoryCounts, nFiles)
+
+    paths = tf.convert_to_tensor(paths, dtype=tf.string)
+    labels = tf.convert_to_tensor(labels, dtype=tf.int32)
+
+    # Calculate class weights
+    weights = np.sum(categoryCounts) / (len(categories) * categoryCounts)
+    weights = tf.convert_to_tensor(weights, dtype=tf.float32)
+
+    def _parse_image(x, y):
+        # Decode image
+        x = tf.io.read_file(x)
+        x = tf.io.decode_image(x, channels=3)
+
+        # Cast to float
+        x = tf.cast(x, tf.float32)
+
+        # Resize
+        x = tf.keras.preprocessing.image.smart_resize(x, (size, size))
+
+        # Center features
+        x = 2 * (x / 255 - 0.5)
+
+        # Transpose to channel first format
+        if channel_first:
+            x = tf.transpose(x, (2, 0, 1))
+
+        # One-hot encode labels
+        y = tf.one_hot(y, len(categories))
+
+        return x, y
+
+    ds = (
+        tf.data.Dataset.from_tensor_slices((paths, labels))
+        .shuffle(len(paths))
+        .map(_parse_image)
+        .batch(batch_size)
+        .prefetch(tf.data.AUTOTUNE)
+    )
+
+    # Print dataset info
+    print(f"Found {len(paths)} images belonging to {len(categories)} classes.")
+
+    return ds, weights
 
 
 if __name__ == "__main__":
@@ -1389,6 +1540,68 @@ if __name__ == "__main__":
             thaw_layers=args.thaw_layers,
             basic_weights=weights,
         )
+
+    elif args.script == "finetune":
+        dataDir = args.dataDir
+
+        # Create dataset
+        trainDs, weights = create_flat_dataset(os.path.join(dataDir, "train"), size=224)
+        valDs, _ = create_flat_dataset(
+            os.path.join(dataDir, "test"),
+            size=224,
+        )
+
+        weightPath = f"./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_{seed:02}/model.ckpt_epoch89"
+        model = ecoset.make_alex_net_v2(
+            weights_path=weightPath,
+            softmax=True,
+            input_shape=(224, 224, 3),
+            l2_reg=args.l2_reg,
+        )
+
+        # Modify model for new classes
+        
+
+        # Make callbacks
+        checkpoint = tf.keras.callbacks.ModelCheckpoint(
+            f"./models/deepCats/AlexNet/control/seed{seed:02}/epoch{{epoch:02d}}-val_loss{{val_loss:.2f}}.hdf5",
+            monitor="val_loss",
+            save_freq="epoch",
+        )
+
+        hyperParams = (
+            f"-lr{args.learningRate}"
+            f"-decay{args.lrDecay}"
+            f"{'-new_weights' if args.new_weights else ''}"
+            f"{'-l2_reg' if args.l2_reg else ''}"
+        )
+        loggingFile = (
+            f"./models/deepCats/AlexNet/control/seed{seed:02}/training{hyperParams}.csv"
+        )
+        print("Logging to ", loggingFile)
+        csvLogger = tf.keras.callbacks.CSVLogger(
+            loggingFile,
+            append=True,
+        )
+        callbacks = [checkpoint, csvLogger]
+
+        if args.lrDecay < 1.0:
+            schedule = tf.keras.callbacks.ReduceLROnPlateau(
+                monitor="val_loss", factor=args.lrDecay, patience=1, verbose=1
+            )
+            callbacks.append(schedule)
+
+        # Train model
+        fit, _ = train_control_model(
+            model=model,
+            trainDs=trainDs,
+            valDs=valDs,
+            lr=args.learningRate,
+            epochs=args.epochs,
+            callbacks=callbacks,
+            thaw_layers=args.thaw_layers,
+            basic_weights=weights,
+        )
     else:  # Main script
         tf.config.run_functions_eagerly(True)
         tf.data.experimental.enable_debug_mode()
@@ -1396,6 +1609,10 @@ if __name__ == "__main__":
         strategy = tf.distribute.get_strategy()
 
         with strategy.scope():
+            level = 3
+            trainDs, weights = create_level_dataset("./images/deepLevels/train", 2)
+            valDs, _ = create_level_dataset("./images/deepLevels/test", 2)
+
             # Load model
             weightPath = f"./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_01/model.ckpt_epoch89"
             model = ecoset.make_alex_net_v2(
