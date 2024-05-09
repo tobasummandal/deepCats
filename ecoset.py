@@ -136,7 +136,10 @@ def make_vNet(
     output_shape=565,
     weights_path=None,
     softmax=False,
+    data_format="channels_first",
 ):
+    normAxis = -3 if data_format == "channels_first" else -1
+
     inputs = tf.keras.Input(shape=input_shape)
 
     # Layer 1 - V1
@@ -146,9 +149,9 @@ def make_vNet(
         name="conv_l1",
         padding="same",
         use_bias=False,
-        data_format="channels_first",
+        data_format=data_format,
     )(inputs)
-    x = tfa.layers.GroupNormalization(axis=1, name="groupNorm_l1")(x)
+    x = layers.GroupNormalization(axis=normAxis, name="groupNorm_l1")(x)
     x = layers.Dropout(0.2)(x)
     x = layers.ReLU()(x)
 
@@ -159,36 +162,37 @@ def make_vNet(
         name="conv_l2",
         padding="same",
         use_bias=False,
+        data_format=data_format,
     )(x)
-    x = tfa.layers.GroupNormalization(axis=1, name="groupNorm_l2")(x)
+    x = layers.GroupNormalization(axis=normAxis, name="groupNorm_l2")(x)
     x = layers.Dropout(0.2)(x)
     x = layers.ReLU()(x)
 
     # Layer 3 - V3
-    x = layers.MaxPool2D(pool_size=(2, 2), data_format="channels_first")(x)
+    x = layers.MaxPool2D(pool_size=(2, 2), padding="same", data_format=data_format)(x)
     x = layers.Conv2D(
         256,
         (5, 5),
         name="conv_l3",
         padding="same",
         use_bias=False,
-        data_format="channels_first",
+        data_format=data_format,
     )(x)
-    x = tfa.layers.GroupNormalization(axis=1, name="groupNorm_l3")(x)
+    x = layers.GroupNormalization(axis=normAxis, name="groupNorm_l3")(x)
     x = layers.Dropout(0.2)(x)
     x = layers.ReLU()(x)
 
     # Layer 4 - hV4
-    x = layers.MaxPool2D(pool_size=(2, 2), data_format="channels_first")(x)
+    x = layers.MaxPool2D(pool_size=(2, 2), padding="same", data_format=data_format)(x)
     x = layers.Conv2D(
         256,
         (5, 5),
         name="conv_l4",
         padding="same",
         use_bias=False,
-        data_format="channels_first",
+        data_format=data_format,
     )(x)
-    x = tfa.layers.GroupNormalization(axis=1, name="groupNorm_l4")(x)
+    x = layers.GroupNormalization(axis=normAxis, name="groupNorm_l4")(x)
     x = layers.Dropout(0.2)(x)
     x = layers.ReLU()(x)
 
@@ -199,9 +203,9 @@ def make_vNet(
         name="conv_l5",
         padding="same",
         use_bias=False,
-        data_format="channels_first",
+        data_format=data_format,
     )(x)
-    x = tfa.layers.GroupNormalization(axis=1, name="groupNorm_l5")(x)
+    x = layers.GroupNormalization(axis=normAxis, name="groupNorm_l5")(x)
     x = layers.Dropout(0.2)(x)
     x = layers.ReLU()(x)
 
@@ -212,71 +216,71 @@ def make_vNet(
         name="conv_l6",
         padding="same",
         use_bias=False,
-        data_format="channels_first",
+        data_format=data_format,
     )(x)
-    x = tfa.layers.GroupNormalization(axis=1, name="groupNorm_l6")(x)
+    x = layers.GroupNormalization(axis=normAxis, name="groupNorm_l6")(x)
     x = layers.Dropout(0.2)(x)
     x = layers.ReLU()(x)
 
     # Layer 7 - pFUS
-    x = layers.MaxPool2D(pool_size=(2, 2), data_format="channels_first")(x)
+    x = layers.MaxPool2D(pool_size=(2, 2), padding="same", data_format=data_format)(x)
     x = layers.Conv2D(
         1024,
         (3, 3),
         name="conv_l7",
         padding="same",
         use_bias=False,
-        data_format="channels_first",
+        data_format=data_format,
     )(x)
-    x = tfa.layers.GroupNormalization(axis=1, name="groupNorm_l7")(x)
+    x = layers.GroupNormalization(axis=normAxis, name="groupNorm_l7")(x)
     x = layers.Dropout(0.2)(x)
     x = layers.ReLU()(x)
 
     # Layer 8 - mFUS
-    x = layers.MaxPool2D(pool_size=(2, 2), data_format="channels_first")(x)
+    x = layers.MaxPool2D(pool_size=(2, 2), padding="same", data_format=data_format)(x)
     x = layers.Conv2D(
         1024,
         (3, 3),
         name="conv_l8",
         padding="same",
         use_bias=False,
-        data_format="channels_first",
+        data_format=data_format,
     )(x)
-    x = tfa.layers.GroupNormalization(axis=1, name="groupNorm_l8")(x)
+    x = layers.GroupNormalization(axis=normAxis, name="groupNorm_l8")(x)
     x = layers.Dropout(0.2)(x)
     x = layers.ReLU()(x)
 
     # Layer 9
-    x = layers.MaxPool2D(pool_size=(2, 2), data_format="channels_first")(x)
+    x = layers.MaxPool2D(pool_size=(2, 2), padding="same", data_format=data_format)(x)
     x = layers.Conv2D(
         2048,
         (1, 1),
         name="conv_l9",
         padding="same",
         use_bias=False,
-        data_format="channels_first",
+        data_format=data_format,
     )(x)
-    x = tfa.layers.GroupNormalization(axis=1, name="groupNorm_l9")(x)
+    x = layers.GroupNormalization(axis=normAxis, name="groupNorm_l9")(x)
     x = layers.Dropout(0.2)(x)
     x = layers.ReLU()(x)
 
     # Layer 10
-    x = layers.MaxPool2D(pool_size=(2, 2), data_format="channels_first")(x)
+    x = layers.MaxPool2D(pool_size=(2, 2), padding="same", data_format=data_format)(x)
     x = layers.Conv2D(
         2048,
         (1, 1),
         name="conv_l10",
         padding="same",
         use_bias=False,
-        data_format="channels_first",
+        data_format=data_format,
     )(x)
-    x = tfa.layers.GroupNormalization(axis=1, name="groupNorm_l10")(x)
+    x = layers.GroupNormalization(axis=normAxis, name="groupNorm_l10")(x)
     x = layers.Dropout(0.2)(x)
     x = layers.ReLU()(x)
 
     # Readout
-    x = layers.GlobalAveragePooling2D(data_format="channels_first")(x)
-    x = layers.Flatten(data_format="channels_first")(x)
+    x = layers.GlobalAveragePooling2D(data_format=data_format)(x)
+    x = layers.Flatten(data_format=data_format)(x)
     x = layers.Dense(output_shape, name="readout")(x)
 
     if softmax:
@@ -334,7 +338,7 @@ def load_vNet_weights(model, weights_path):
             # Set weights
             layer.set_weights([reader.get_tensor(weightKeys[0])])
 
-        elif isinstance(layer, tfa.layers.GroupNormalization):
+        elif isinstance(layer, layers.GroupNormalization):
             # Get layer number mapped to the checkpoint
             layerN = str(int(layer.name.split("_")[-1].replace("l", "")) - 1)
             weightKeys = [
@@ -412,13 +416,18 @@ def preprocess_vNet(image):
 
 if __name__ == "__main__":
     import numpy as np
+    from scipy import io
 
-    model = make_alex_net_v2(
-        weights_path="./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_01/model.ckpt_epoch89",
+    imgPath = "images/allBirds/test/n01604330_17035.JPEG"
+
+    vNet = make_vNet(
+        weights_path="./models/vNET/ecoset_training_seeds_01_to_10/training_seed_01/model.ckpt_epoch79",
         softmax=True,
+        input_shape=(3, 128, 128),
+        data_format="channels_first",
     )
 
-    def _parse_image(x):
+    def _parse_image(x, image_size=(224, 224), data_format="channels_last"):
         # Decode image
         x = tf.io.read_file(x)
         x = tf.io.decode_image(x, channels=3)
@@ -430,21 +439,58 @@ if __name__ == "__main__":
         x = tf.cast(x, tf.float32)
 
         # Resize
-        x = tf.keras.preprocessing.image.smart_resize(x, (224, 224))
+        x = tf.keras.preprocessing.image.smart_resize(x, image_size)
 
         # Center features
         x = 2 * (x / 255 - 0.5)
 
+        # Change to channel first format
+        if data_format == "channels_first":
+            x = tf.transpose(x, (0, 3, 1, 2))
+
         return x
 
     # Load a test image
-    img = _parse_image("./images/bird2.jpg")
+    img = _parse_image(
+        imgPath,
+        image_size=(128, 128),
+        data_format="channels_first",
+    )
 
     # Predict
-    preds = model.predict(img)
+    vNetPreds = vNet.predict(img)
 
     # Top 5
-    preds = tf.nn.top_k(preds, k=5)
+    vNetPreds = tf.nn.top_k(vNetPreds, k=5)
+
+    del vNet
+    alexNet = make_alex_net_v2(
+        weights_path="./models/AlexNet/ecoset_training_seeds_01_to_10/training_seed_01/model.ckpt_epoch89",
+        softmax=True,
+    )
+
+    # Load a test image
+    img = _parse_image(
+        imgPath,
+        image_size=(224, 224),
+        data_format="channels_last",
+    )
+
+    # Predict
+    alexNetPreds = alexNet.predict(img)
+
+    # Top 5
+    alexNetPreds = tf.nn.top_k(alexNetPreds, k=5)
+
+    onlinePreds = io.loadmat("codeoceanTest.mat")
+    onlinePreds = tf.nn.top_k(onlinePreds["layer_012"], k=5)
 
     # Print results
-    print(preds)
+    print("vNet predictions:")
+    print(vNetPreds)
+    print()
+    print("AlexNet predictions:")
+    print(alexNetPreds)
+    print()
+    print("Online predictions:")
+    print(onlinePreds)
