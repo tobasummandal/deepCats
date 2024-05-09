@@ -8,6 +8,7 @@ from scipy.spatial.distance import pdist, squareform, cdist
 from scipy import stats
 from treelib import Tree
 from HiPart.clustering import IPDDP
+import sklearn.metrics as metrics
 
 
 # List folders
@@ -810,6 +811,7 @@ def make_categories(
 
     # Generate exemplars
     subExemplars = np.zeros((nImages * 8, nFeatures), dtype=np.float32)
+    subLabels = np.zeros((nImages * 8,), dtype=np.int32)
     for i, center in enumerate(subCentroids):
         subExemplars[(i * nImages) : (i * nImages + nImages)] = exemplar_maker(
             nImages,
@@ -818,8 +820,9 @@ def make_categories(
             radius_density=radius_density,
             relu=relu,
         )
+        subLabels[(i * nImages) : (i * nImages + nImages)] = i
 
-    return subExemplars, subCentroids
+    return subExemplars, subCentroids, subLabels
 
 
 class diana:
@@ -1394,6 +1397,150 @@ def calc_category_utility(exemplars, labels, binary=True, verbose=False):
     return category_utilities
 
 
+def print_cluster_stats(tree, hierLabels, exemplars):
+    """
+    HierLabels must be formatted nxk where k are the levels of the hierarchy
+    """
+    # Adjusted rand score, 1 is perfect, pair counting method
+    print("Adjusted Rand score:")
+    _ = external_evaluate_over_levels(
+        tree, hierLabels, metrics.adjusted_rand_score, verbose=True
+    )
+
+    # Mutual information, 1 is perfect, agreement between two partitions
+    print("Adjusted Mutual information:")
+    _ = external_evaluate_over_levels(
+        tree, hierLabels, metrics.adjusted_mutual_info_score, verbose=True
+    )
+
+    # V-measure, 1 is perfect, weighted harmonic mean of homogeneity (cluster only includes one class) and completeness (all members in one class)
+    print("V-measure:")
+    _ = external_evaluate_over_levels(
+        tree, hierLabels, metrics.v_measure_score, verbose=True
+    )
+
+    # Fowlkes-Mallows, 1 is perfect, geometric mean between precision (TP/TP+FP) and recall (TP/FP+FN)
+    print("Fowlkes-Mallows:")
+    _ = external_evaluate_over_levels(
+        tree, hierLabels, metrics.fowlkes_mallows_score, verbose=True
+    )
+
+    # Davies-Bouldin, 0 is best partitioning, signifies average similarity between clusters
+    print("Davies-Bouldin:")
+    _ = internal_evaluate_over_levels(
+        tree,
+        exemplars,
+        metrics.davies_bouldin_score,
+        level=3,
+        verbose=True,
+    )
+
+    # Silhouette score, 0 is overlapping clusters, +1 is perfect clustering, -1 is wrong clustering
+    print("Silhouette score:")
+    _ = internal_evaluate_over_levels(
+        tree,
+        exemplars,
+        metrics.silhouette_score,
+        level=3,
+        verbose=True,
+    )
+
+    # Calinski_harabasz, higher is denser well-separated clusters
+    print("Calinski-Harabasz:")
+    _ = internal_evaluate_over_levels(
+        tree,
+        exemplars,
+        metrics.calinski_harabasz_score,
+        level=3,
+        verbose=True,
+    )
+
+    return None
+
+
+def print_category_metrics(exemplars, labels, simMat, imgInfo, binary=True):
+    """
+    Labels must be formatted nx3 where the second dimension is super, basic, and sub
+    """
+    superLabels = labels[:, 0]
+    basicLabels = labels[:, 1]
+    subLabels = labels[:, 2]
+
+    print("Category cue validity = Sum(P(C|fk)) / n")
+    print("Superordinate: ")
+    calc_cue_validity(exemplars, superLabels, binary=binary, verbose=True)
+
+    print("Basic: ")
+    calc_cue_validity(exemplars, basicLabels, binary=binary, verbose=True)
+
+    print("Subordinate: ")
+    _ = calc_cue_validity(exemplars, subLabels, binary=binary, verbose=True)
+    print()
+
+    print("Category validity = Sum(P(fk|C)) / n")
+    print("Superordinate: ")
+    calc_category_validity(exemplars, superLabels, binary=binary, verbose=True)
+
+    print("Basic: ")
+    calc_category_validity(exemplars, basicLabels, binary=binary, verbose=True)
+
+    print("Subordinate: ")
+    _ = calc_category_validity(exemplars, subLabels, binary=binary, verbose=True)
+    print()
+
+    print("Collocation (cue validity * category validity)")
+    print("Superordinate: ")
+    calc_collocation(exemplars, superLabels, binary=binary, verbose=True)
+
+    print("Basic: ")
+    calc_collocation(exemplars, basicLabels, binary=binary, verbose=True)
+
+    print("Subordinate: ")
+    _ = calc_collocation(exemplars, subLabels, binary=binary, verbose=True)
+    print()
+
+    print("Category utility P(C) * Sum(P(Fk|C) ** 2 - P(Fk)**2)")
+    print("Superordinate: ")
+    calc_category_utility(exemplars, superLabels, binary=binary, verbose=True)
+
+    print("Basic: ")
+    calc_category_utility(exemplars, basicLabels, binary=binary, verbose=True)
+
+    print("Subordinate: ")
+    _ = calc_category_utility(exemplars, subLabels, binary=binary, verbose=True)
+    print()
+
+    print("Cluster index (mean within sim - mean betwen sim)")
+    simCluster = SimCluster(simMat=simMat, imgInfo=imgInfo)
+
+    print("Superordinate: ")
+    print(simCluster.calculate_index(level="super"))
+
+    print("Basic: ")
+    print(simCluster.calculate_index(level="basic"))
+
+    print("Subordinate: ")
+    print(simCluster.calculate_index(level="sub"))
+
+
+def npARI(labels_true, labels_pred, noise_label=-1):
+    "Return noise penalized adjusted rand index."
+    # Remove the samples that were labeled noise
+    noNoiseIdxs = labels_pred != noise_label
+
+    # Calculate ARI for labels not labeled noise
+    ari = metrics.adjusted_rand_score(
+        labels_true[noNoiseIdxs], labels_pred[noNoiseIdxs]
+    )
+
+    # Calculate penalty for noise labels
+    noisePenal = (
+        labels_true.shape[0] - np.sum(noNoiseIdxs == False)
+    ) / labels_true.shape[0]
+
+    return ari * noisePenal
+
+
 def cartesian_to_polar(coords):
     """
     Convert cartesian coordinates to polar coordinates
@@ -1426,7 +1573,9 @@ class EBRW:
         self,
         memory_reps: np.ndarray,
         memory_categories: np.ndarray,
+        rng: np.random.Generator,
         memory_strengths: np.ndarray = None,
+        memory_strength_multiplier: float = 1.0,
         p: float = 2.0,
         c: float = 1.0,
         b: float = 0,
@@ -1444,20 +1593,23 @@ class EBRW:
         self.memory_strengths = (
             memory_strengths
             if memory_strengths is not None
-            else np.ones(len(memory_categories))
+            else np.ones(len(memory_categories)) / len(memory_categories)
         )
+        self.memory_strengths *= memory_strength_multiplier
         self.categories = np.unique(memory_categories)
 
         if len(self.categories) > 2:
             raise ValueError("We only supports binary categorization")
 
+        self.rng = rng
+
         # Model parameters
-        self.p = p  # Done
-        self.c = c  # Done
-        self.b = b  # ??
-        self.A = A
-        self.B = B
-        self.alpha = alpha
+        self.p = p  # Distance metric
+        self.c = c  # Sensitivity
+        self.b = b  # Criterion/background
+        self.A = A  # Category 0 threshold
+        self.B = B  # Category 1 threshold
+        self.alpha = alpha  # Step time constant
 
     def _sim(self, probes: np.ndarray, category: int, metric="minkowski", **kwargs):
         """
@@ -1484,7 +1636,10 @@ class EBRW:
         dists = cdist(probes, category_reps, metric=metric, **kwargs)
 
         # Calculate similarity
-        return np.exp(-self.c * dists)
+        return (
+            np.exp(-self.c * dists)
+            * self.memory_strengths[self.memory_categories == category]
+        )
 
     def _sum_sims(self, probes, **kwargs):
         """
@@ -1534,8 +1689,8 @@ class EBRW:
         bot = ((p / q) ** (self.A + self.B)) - 1
         theta1A = top / bot
 
-        top = ((p / q) ** -self.B) + 1
-        bot = ((p / q) ** -self.B) - 1
+        top = ((p / q) ** self.B) + 1
+        bot = ((p / q) ** self.B) - 1
         theta2A = top / bot
 
         top = (theta1A * (self.A + self.B)) - (theta2A * self.B)
@@ -1543,12 +1698,12 @@ class EBRW:
         stepsA = top / bot
 
         # Calculate steps B
-        top = ((p / q) ** -(self.A - self.B)) + 1
-        bot = ((p / q) ** -(self.A - self.B)) - 1
+        top = ((p / q) ** -(self.A + self.B)) + 1
+        bot = ((p / q) ** -(self.A + self.B)) - 1
         theta1B = top / bot
 
-        top = ((p / q) ** self.A) + 1
-        bot = ((p / q) ** self.A) - 1
+        top = ((p / q) ** -self.A) + 1
+        bot = ((p / q) ** -self.A) - 1
         theta2B = top / bot
 
         top = (theta1B * (self.A + self.B)) - (theta2B * self.A)
@@ -1558,18 +1713,25 @@ class EBRW:
         # Stick the steps together
         steps = np.stack([stepsA, stepsB], axis=1)
 
+        # Calculate step time
+        stepTime = (self.alpha + 1) / (sumA + sumB)
+
         # Calculate decisions
         decisions = np.zeros((probes.shape[0],), dtype=np.int32)
         rts = np.zeros((probes.shape[0],))
         for i in range(probes.shape[0]):
             if categories[i] == self.categories[0]:
-                decision = np.random.choice([0, 1], p=[pA[i], 1 - pA[i]]).astype(np.int32)
+                decision = self.rng.choice([0, 1], p=[pA[i], 1 - pA[i]]).astype(
+                    np.int32
+                )
                 decisions[i] = decision
-                rts[i] = steps[i, decision]
+                rts[i] = steps[i, decision] * stepTime[i]
             else:
-                decision = np.random.choice([0, 1], p=[pB[i], 1 - pB[i]]).astype(np.int32)
+                decision = self.rng.choice([0, 1], p=[pB[i], 1 - pB[i]]).astype(
+                    np.int32
+                )
                 decisions[i] = decision
-                rts[i] = steps[i, decision]
+                rts[i] = steps[i, decision] * stepTime[i]
 
         return decisions, rts
 
