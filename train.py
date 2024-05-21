@@ -1089,7 +1089,7 @@ if __name__ == "__main__":
         "--script",
         type=str,
         help="type of model to train",
-        choices=["ecoCubAmnesia", "twoHot", "branch", "control"],
+        choices=["ecoCubAmnesia", "twoHot", "branch", "control", "finetune"],
     )
     parser.add_argument(
         "--seed",
@@ -1560,11 +1560,25 @@ if __name__ == "__main__":
         )
 
         # Modify model for new classes
-        
+        out = model.get_layer("fc7").output
+        out = tf.keras.layers.Conv2D(
+            weights.shape[0],
+            (1, 1),
+            padding="same",
+            activation=None,
+            kernel_regularizer=(
+                tf.keras.regularizers.l2(0.0005) if args.l2_reg else None
+            ),
+            name="fc8",
+        )(out)
+        out = tf.keras.layers.GlobalAveragePooling2D()(out)
+        out = tf.keras.layers.Flatten()(out)
+        out = tf.keras.layers.Softmax()(out)
+        model = tf.keras.Model(inputs=model.input, outputs=out)
 
         # Make callbacks
         checkpoint = tf.keras.callbacks.ModelCheckpoint(
-            f"./models/deepCats/AlexNet/control/seed{seed:02}/epoch{{epoch:02d}}-val_loss{{val_loss:.2f}}.hdf5",
+            f"./models/deepCats/AlexNet/finetune/seed{seed:02}/epoch{{epoch:02d}}-val_loss{{val_loss:.2f}}.hdf5",
             monitor="val_loss",
             save_freq="epoch",
         )
@@ -1575,9 +1589,7 @@ if __name__ == "__main__":
             f"{'-new_weights' if args.new_weights else ''}"
             f"{'-l2_reg' if args.l2_reg else ''}"
         )
-        loggingFile = (
-            f"./models/deepCats/AlexNet/control/seed{seed:02}/training{hyperParams}.csv"
-        )
+        loggingFile = f"./models/deepCats/AlexNet/finetune/seed{seed:02}/training{hyperParams}.csv"
         print("Logging to ", loggingFile)
         csvLogger = tf.keras.callbacks.CSVLogger(
             loggingFile,
