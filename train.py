@@ -1089,7 +1089,7 @@ if __name__ == "__main__":
         "--script",
         type=str,
         help="type of model to train",
-        choices=["ecoCubAmnesia", "twoHot", "branch", "control"],
+        choices=["ecoCubAmnesia", "twoHot", "branch", "control", "finetune"],
     )
     parser.add_argument(
         "--seed",
@@ -1560,7 +1560,6 @@ if __name__ == "__main__":
         )
 
         # Modify model for new classes
-        
 
         # Make callbacks
         checkpoint = tf.keras.callbacks.ModelCheckpoint(
