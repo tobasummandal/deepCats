@@ -1,3 +1,7 @@
+import numpy as np
+from scipy.spatial.distance import squareform, cdist
+from scipy import stats
+
 def exemplar_maker(n, center, radius=1, radius_density="uniform", relu=False):
     nDims = len(center)
 
