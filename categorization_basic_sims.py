@@ -5,6 +5,7 @@ from scipy import stats
 from itertools import combinations
 import sklearn.metrics as metrics
 from treelib import Tree
+import os
 
 class SimCluster:
     def __init__(self, simMat, imgInfo):
@@ -1144,14 +1145,14 @@ def simulate_task(
                 # Simulate some reps from each centroid
                 testReps = np.concatenate(
                     [
-                        cat.exemplar_maker(nSims, centroids[sub], **exemplar_kwargs)
+                        exemplar_maker(nSims, centroids[sub], **exemplar_kwargs)
                         for sub in subs
                     ],
                     axis=0,
                 )
                 memoryReps = np.concatenate(
                     [
-                        cat.exemplar_maker(nSims, centroids[sub], **exemplar_kwargs)
+                        exemplar_maker(nSims, centroids[sub], **exemplar_kwargs)
                         for sub in subs
                     ],
                     axis=0,
@@ -1179,7 +1180,7 @@ def simulate_task(
                     # Make representations
                     foilReps = np.concatenate(
                         [
-                            cat.exemplar_maker(nSims, centroids[sub], **exemplar_kwargs)
+                            exemplar_maker(nSims, centroids[sub], **exemplar_kwargs)
                             for sub in foilSubs
                         ],
                         axis=0,
@@ -1197,7 +1198,7 @@ def simulate_task(
                     _ebrwKwargs[key] = value[i]
                 else:
                     _ebrwKwargs[key] = value
-            ebrw = cat.EBRW(
+            ebrw = EBRW(
                 memory_reps=memoryReps,
                 memory_categories=memoryLabels,
                 memory_strengths=np.ones(len(memoryReps)) * (1 / nMemory),
@@ -1228,7 +1229,42 @@ def simulate_task(
 
     return performance
 
-def run_ebrw_simulation(ebrw_kwargs, simReps, perfFile, seeds=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]):
+def create_simulated_image_info():
+    """
+    Create simulated image info DataFrame for categorization experiments.
+    
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame with columns 'super', 'basic', 'sub', 'set' containing
+        hierarchical category labels and train/test split information.
+    """
+    # Make subordinate labels, a new index every 100 images
+    subLabels = np.repeat(np.arange(8), 100)
+
+    # Designate half of the images as test and train, alternating every 50
+    trainTest = np.concatenate([np.repeat(["train", "test"], 50) for i in range(8)])
+
+    # Make basic and super labels
+    # Every 2 subordinate are the same basic level category
+    basicLabels = np.repeat(np.arange(4), 200)
+
+    # Every 2 basic level categories are the same super level category
+    superLabels = np.repeat(np.arange(2), 400)
+
+    # Stick together labels
+    simInfo = pd.DataFrame(
+        {
+            "super": superLabels,
+            "basic": basicLabels,
+            "sub": subLabels,
+            "set": trainTest,
+        }
+    )
+    
+    return simInfo
+
+def run_ebrw_simulation(ebrw_kwargs, simReps, simInfo, file_name, seeds=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]):
     """
     Run EBRW simulation with given parameters and return performance summaries.
     
@@ -1238,7 +1274,9 @@ def run_ebrw_simulation(ebrw_kwargs, simReps, perfFile, seeds=[1, 2, 3, 4, 5, 6,
         Parameters for EBRW model (e.g., {"c": 1, "b": 0.25})
     simReps : np.ndarray
         Exemplar representations to use
-    perfFile : str
+    simInfo : pd.DataFrame
+        DataFrame with hierarchical category information
+    file_name : str
         Filename to save/load performance data
     seeds : list
         Random seeds to use for simulation
@@ -1249,7 +1287,7 @@ def run_ebrw_simulation(ebrw_kwargs, simReps, perfFile, seeds=[1, 2, 3, 4, 5, 6,
         (subSimPerformance, subSimPerfAccSummary, subSimPerfRTSummary)
     """
     
-    if not os.path.exists(perfFile):
+    if not os.path.exists(file_name):
         # Preallocate performance dataframe
         subSimPerformance = pd.DataFrame()
 
@@ -1273,10 +1311,10 @@ def run_ebrw_simulation(ebrw_kwargs, simReps, perfFile, seeds=[1, 2, 3, 4, 5, 6,
             subSimPerformance = pd.concat([subSimPerformance, perf], axis=0)
 
         # Save
-        subSimPerformance.to_csv(perfFile, index=False)
+        subSimPerformance.to_csv(file_name, index=False)
     else:
         print("Loading performance from file")
-        subSimPerformance = pd.read_csv(perfFile)
+        subSimPerformance = pd.read_csv(file_name)
 
     hierOrder = ["super", "basic", "sub"]
     subSimPerformance["level"] = pd.Categorical(
