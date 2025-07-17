@@ -1264,7 +1264,7 @@ def create_simulated_image_info():
     
     return simInfo
 
-def run_ebrw_simulation(ebrw_kwargs, simReps, simInfo, file_name, seeds=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]):
+def run_ebrw_simulation(ebrw_kwargs, simReps, file_name, seeds=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]):
     """
     Run EBRW simulation with given parameters and return performance summaries.
     
@@ -1288,6 +1288,8 @@ def run_ebrw_simulation(ebrw_kwargs, simReps, simInfo, file_name, seeds=[1, 2, 3
     """
     
     if not os.path.exists(file_name):
+
+        simInfo = create_simulated_image_info()
         # Preallocate performance dataframe
         subSimPerformance = pd.DataFrame()
 
