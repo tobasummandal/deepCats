@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 from scipy.spatial.distance import squareform, cdist, pdist
 from scipy import stats
 from itertools import combinations
@@ -981,3 +982,319 @@ class EBRW:
                 rts[i] = steps[i, decision] * stepTime[i]
 
         return decisions, rts
+
+def simulate_task(
+    imgInfo: pd.DataFrame,
+    *,
+    rng: np.random.Generator,
+    exemplars: np.ndarray = None,
+    centroids: np.ndarray = None,
+    balanced: bool = True,
+    nreps: int = 100,
+    foils: bool = False,
+    exemplar_kwargs: dict = {},
+    ebrw_kwargs: dict = {},
+) -> pd.DataFrame:
+    """
+    Return results from simulating the category verification task.
+
+    Parameters
+    ----------
+    imgInfo : pd.DataFrame
+        A dataframe with at least the columns "super", "basic", "sub", "set". If
+        "image" is present, it will be used to label the images in the task,
+        otherwise, representations are assumed to be simulated.
+    rng: np.random.Generator
+        A numpy random number generator, passed along to any functions needing
+        the RNG.
+    exemplars : np.ndarray, optional
+        A 2D array of shape (nImages, nFeatures) with the exemplars.
+    centroids : np.ndarray, optional
+        A 2D array of shape (nCategories, nFeatures) with the centroids.
+    balanced : bool, optional
+        Whether to balance the memory exemplars across levels.
+    nreps : int, optional
+        The number of representations for the target (and foil) category in
+        memory at each level.
+    foils : bool, optional
+        Whether to include foils in the task.
+    exemplar_kwargs : dict, optional
+        Keyword arguments to pass to the exemplar_maker function.
+    ebrw_kwargs : dict, optional
+        Keyword arguments to pass to the EBRW model.
+
+    Returns
+    -------
+    pd.DataFrame
+        A dataframe with columns "image", "category", "level", "response", "RT",
+        containing the simulated task results.
+    """
+
+    def _bootstrapReps(reps, repIdxs, subs):
+        # Bootstraps representations based on subordinates
+        nSim = int(nreps / len(subs))
+        if nSim % 1 != 0:
+            raise ValueError(
+                "nreps must be divisible by the number of subordinates at every level"
+            )
+        else:
+            nSim = int(nSim)
+
+        bootInfo = imgInfo.loc[repIdxs].reset_index(drop=True)
+
+        bootReps = []
+        for sub in subs:
+            # Get representations for the subordinates
+            subIdxs = bootInfo[bootInfo["sub"] == sub].index
+            subReps = reps[subIdxs]
+
+            # Bootstrap the representations
+            bootReps += [rng.choice(subReps, size=nSim, replace=True)]
+
+        return np.concatenate(bootReps, axis=0)
+
+    if (exemplars is not None and centroids is not None) or (
+        exemplars is None and centroids is None
+    ):
+        raise ValueError("Either exemplars or centroids must be provided")
+    else:  # Temporary measure to make highlighting work
+        _ = 1 + 1
+
+    if centroids is not None:
+        # Check if imgInfo has the right subordinate category labels
+        subs = imgInfo["sub"].unique()
+        if not np.all(np.array(range(len(centroids))) == subs):
+            raise ValueError("Centroids do not match the subordinate category labels")
+
+    # Figure out how many exemplars are in memory
+    nMemory = len(imgInfo.loc[imgInfo["set"] == "train"])
+
+    # Setup dataframe
+    performance = pd.DataFrame(columns=["image", "category", "level", "response", "RT"])
+
+    # Loop through levels
+    levels = ["super", "basic", "sub"]
+    for i, level in enumerate(levels):
+        # Get categories at this level
+        cats = imgInfo[level].unique()
+
+        # Loop through categories
+        for category in cats:
+            if exemplars is not None:
+                # Find the test exemplars for this category
+                testIdxs = imgInfo.loc[
+                    (imgInfo[level] == category) & (imgInfo["set"] == "test")
+                ].index
+                testReps = exemplars[testIdxs]
+
+                # Find the memory exemplars for this category
+                memoryIdxs = imgInfo.loc[
+                    (imgInfo[level] == category) & (imgInfo["set"] == "train")
+                ].index
+                memoryReps = exemplars[memoryIdxs]
+                memoryLabels = np.zeros(len(memoryReps))
+
+                if foils:  # EBRW task with foils
+                    foilIdx = imgInfo.loc[
+                        (imgInfo[level] != category) & (imgInfo["set"] == "train")
+                    ].index
+
+                    # Only keep the foils with the same parent category
+                    if level != "super":  # Keep all for super
+                        parentLevel = levels[levels.index(level) - 1]
+                        parentCat = imgInfo.iloc[memoryIdxs[0]][parentLevel]
+                        validIdxs = imgInfo.loc[imgInfo[parentLevel] == parentCat].index
+
+                        # Only keep foilIDxs in validIdxs
+                        foilIdx = [x for x in foilIdx if x in validIdxs]
+
+                    foilReps = exemplars[foilIdx]
+                    foilLabels = np.ones(len(foilReps))
+
+                if balanced:
+                    # Split the memory representations by subordinate category
+                    memorySubs = imgInfo.loc[memoryIdxs, "sub"].unique()
+
+                    memoryReps = _bootstrapReps(memoryReps, memoryIdxs, memorySubs)
+                    memoryLabels = np.zeros(len(memoryReps))
+
+                    if foils:
+                        # Split the foil representations by subordinate category
+                        foilSubs = imgInfo.loc[foilIdx, "sub"].unique()
+
+                        foilReps = _bootstrapReps(foilReps, foilIdx, foilSubs)
+                        foilLabels = np.ones(len(foilReps))
+
+                if foils:
+                    memoryReps = np.concatenate([memoryReps, foilReps], axis=0)
+                    memoryLabels = np.concatenate([memoryLabels, foilLabels], axis=0)
+            else:  # Using centroids to create balanced levels
+                if balanced:
+                    Warning("balanced argument has no effect on centroids.")
+
+                # Find the subordinates for this category
+                subs = imgInfo.loc[imgInfo[level] == category, "sub"].unique()
+                nSims = int(nreps / len(subs))
+
+                if nSims % 1 != 0:
+                    raise ValueError(
+                        "nreps must be divisible by the number of subordinates at every level"
+                    )
+
+                # Simulate some reps from each centroid
+                testReps = np.concatenate(
+                    [
+                        cat.exemplar_maker(nSims, centroids[sub], **exemplar_kwargs)
+                        for sub in subs
+                    ],
+                    axis=0,
+                )
+                memoryReps = np.concatenate(
+                    [
+                        cat.exemplar_maker(nSims, centroids[sub], **exemplar_kwargs)
+                        for sub in subs
+                    ],
+                    axis=0,
+                )
+                memoryLabels = np.zeros(len(memoryReps))
+
+                # Make foils if necessary
+                if foils:
+                    # Find the subordinates for the foils
+                    foilSubs = imgInfo.loc[imgInfo[level] != category, "sub"].unique()
+
+                    # Only keep the foils with the same parent category
+                    if level != "super":
+                        parentLevel = levels[levels.index(level) - 1]
+                        parentCat = imgInfo.loc[imgInfo["sub"] == subs[0]][
+                            parentLevel
+                        ].iloc[0]
+                        foilSubs = [
+                            sub
+                            for sub in foilSubs
+                            if imgInfo[parentLevel].loc[imgInfo["sub"] == sub].iloc[0]
+                            == parentCat
+                        ]
+
+                    # Make representations
+                    foilReps = np.concatenate(
+                        [
+                            cat.exemplar_maker(nSims, centroids[sub], **exemplar_kwargs)
+                            for sub in foilSubs
+                        ],
+                        axis=0,
+                    )
+                    foilLabels = np.ones(len(foilReps))
+
+                    # Combine foils with memory
+                    memoryReps = np.concatenate([memoryReps, foilReps], axis=0)
+                    memoryLabels = np.concatenate([memoryLabels, foilLabels], axis=0)
+
+            # Handle the possibility of lists in kwargs
+            _ebrwKwargs = {}
+            for key, value in ebrw_kwargs.items():
+                if isinstance(value, list):
+                    _ebrwKwargs[key] = value[i]
+                else:
+                    _ebrwKwargs[key] = value
+            ebrw = cat.EBRW(
+                memory_reps=memoryReps,
+                memory_categories=memoryLabels,
+                memory_strengths=np.ones(len(memoryReps)) * (1 / nMemory),
+                rng=rng,
+                **_ebrwKwargs,
+            )
+
+            decisions, rts = ebrw.categorize(
+                probes=testReps, categories=np.zeros(len(testReps))
+            )
+
+            # Check if images have names
+            if "image" in imgInfo.columns:
+                imageNames = imgInfo.loc[testIdxs, "image"]
+            else:
+                imageNames = "simulated"
+
+            tmp = pd.DataFrame(
+                {
+                    "image": imageNames,
+                    "category": [category] * len(testReps),
+                    "level": [level] * len(testReps),
+                    "response": ["yes" if x == 0 else "no" for x in decisions],
+                    "RT": rts,
+                }
+            )
+            performance = pd.concat([performance, tmp], axis=0)
+
+    return performance
+
+def run_ebrw_simulation(ebrw_kwargs, simReps, perfFile, seeds=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]):
+    """
+    Run EBRW simulation with given parameters and return performance summaries.
+    
+    Parameters:
+    -----------
+    ebrw_kwargs : dict
+        Parameters for EBRW model (e.g., {"c": 1, "b": 0.25})
+    simReps : np.ndarray
+        Exemplar representations to use
+    perfFile : str
+        Filename to save/load performance data
+    seeds : list
+        Random seeds to use for simulation
+    
+    Returns:
+    --------
+    tuple
+        (subSimPerformance, subSimPerfAccSummary, subSimPerfRTSummary)
+    """
+    
+    if not os.path.exists(perfFile):
+        # Preallocate performance dataframe
+        subSimPerformance = pd.DataFrame()
+
+        for seed in seeds:
+            # Set random seed for reproducibility
+            rng = np.random.default_rng(seed)
+            
+            # Simulate task using the existing category structure
+            perf = simulate_task(
+                simInfo,
+                rng=rng,
+                exemplars=simReps,
+                balanced=False,
+                foils=False,
+                ebrw_kwargs=ebrw_kwargs,
+            )
+
+            # Save to dataframe
+            perf["seed"] = seed
+            perf["model"] = "simulated"
+            subSimPerformance = pd.concat([subSimPerformance, perf], axis=0)
+
+        # Save
+        subSimPerformance.to_csv(perfFile, index=False)
+    else:
+        print("Loading performance from file")
+        subSimPerformance = pd.read_csv(perfFile)
+
+    hierOrder = ["super", "basic", "sub"]
+    subSimPerformance["level"] = pd.Categorical(
+        subSimPerformance["level"], categories=hierOrder, ordered=True
+    )
+
+    # Summary
+    subSimPerfAccSummary = (
+        subSimPerformance.groupby(["seed", "level"])["response"]
+        .agg(lambda x: np.mean(x == "yes"))
+        .groupby(["level"])
+        .agg(["mean", "std"])
+    )
+    subSimPerfRTSummary = (
+        subSimPerformance.groupby(["seed", "level"])["RT"]
+        .agg("mean")
+        .groupby(["level"])
+        .agg(["mean", "std"])
+    )
+
+    return subSimPerformance, subSimPerfAccSummary, subSimPerfRTSummary
